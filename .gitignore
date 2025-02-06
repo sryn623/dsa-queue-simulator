@@ -1,0 +1,33 @@
+# Compiled object files
+*.o
+*.obj
+
+# SDL build artifacts
+*.so
+*.dll
+*.dylib
+*.a
+*.lib
+
+# CMake build directory
+build/
+
+# Local libraries
+libs/
+
+# Debug and log files
+*.log
+*.dbg
+*.stackdump
+
+# IDE specific files
+.vscode/
+.idea/
+*.code-workspace
+
+# MacOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
