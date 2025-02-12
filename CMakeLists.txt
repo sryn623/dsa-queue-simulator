@@ -12,7 +12,8 @@ find_package(SDL3 REQUIRED)
 
 # Add executable
 add_executable(${PROJECT_NAME}
-   src/main.cpp
+   src/main.
+   
     #src/test.cpp
 
 )
