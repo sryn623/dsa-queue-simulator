@@ -1,45 +1,55 @@
-#include <SDL3/SDL.h>
+#include "main.h"
+#include "SDL3/SDL_error.h"
+#include "SDL3/SDL_events.h"
+#include "SDL3/SDL_init.h"
+#include "SDL3/SDL_log.h"
+#include <SDL3/SDL_render.h>
+#include <exception>
 
-int main(int argc, char* argv[]) {
+App::App() : m_window("Traffic Simulator", 1280, 720) {
+  // Initialize other sub system
+}
 
-    SDL_Window *window;                    // Declare a pointer
-    bool done = false;
+App::~App() {
+  // Clean up
+}
 
-    SDL_Init(SDL_INIT_VIDEO);              // Initialize SDL3
+void App::run() {
+  while (m_running) {
+    process_event();
+    update();
+    render();
+  }
+}
 
-    // Create an application window with the following settings:
-    window = SDL_CreateWindow(
-        "An SDL3 window",                  // window title
-        640,                               // width, in pixels
-        480,                               // height, in pixels
-        SDL_WINDOW_OPENGL                  // flags - see below
-    );
-
-    // Check that the window was successfully created
-    if (window == NULL) {
-        // In the case that the window could not be made...
-        SDL_LogError(SDL_LOG_CATEGORY_ERROR, "Could not create window: %s\n", SDL_GetError());
-        return 1;
+void App::process_event() {
+  SDL_Event event;
+  while (SDL_PollEvent(&event)) {
+    if (event.type == SDL_EVENT_QUIT) {
+      m_running = false;
     }
+  }
+}
 
-// Working
+void App::update() {}
+void App::render() {
 
-    while (!done) {
-        SDL_Event event;
+  m_window.clear();
 
-        while (SDL_PollEvent(&event)) {
-            if (event.type == SDL_EVENT_QUIT) {
-                done = true;
-            }
-        }
+  // Rendering code goes here
+  m_window.present();
+}
 
-        // Do game logic, present a frame, etc.
-    }
+int main(int argc, const char *argv[]) {
+  (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS));
+  try {
+    App app;
+    app.run();
 
-    // Close and destroy the window
-    SDL_DestroyWindow(window);
+  } catch (const std::exception &e) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "Error: %s\n", e.what());
+  }
 
-    // Clean up
-    SDL_Quit();
-    return 0;
+  SDL_Quit();
+  return 0;
 }
