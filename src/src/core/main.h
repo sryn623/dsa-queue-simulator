@@ -1,35 +1,36 @@
-#include "SDL3/SDL_error.h"
-#include "SDL3/SDL_render.h"
-#include "SDL3/SDL_video.h"
-#include <stdexcept>
-#include"window.h"
+#ifndef MAIN_H
+#define MAIN_H
 
+#include "../generator/traffic_generator.h"
+#include "../traffic/road_system.h"
+#include "SDL3_ttf/SDL_ttf.h"
+#include "text.h"
+#include "window.h"
+#include <SDL3/SDL.h>
+#include <memory>
 
-Window::Window(const std::string& title, int width, int height) {
-  m_window = SDL_CreateWindow(title.c_str(), width, height, SDL_WINDOW_RESIZABLE);
-  if (!m_window){
-    throw  std::runtime_error(SDL_GetError());
-  }
+class App {
+public:
+  App();
+  ~App();
 
-  m_renderer = SDL_CreateRenderer(m_window, nullptr);
-  if (!m_renderer){
-    SDL_DestroyWindow(m_window);
-    throw  std::runtime_error(SDL_GetError());
-  }
+  void run();
 
-}
+private:
+  void update();
+  void render();
+  void process_event();
 
-  Window::~Window() {
-    SDL_DestroyWindow(m_window);
-    SDL_DestroyRenderer(m_renderer);
-  }
+  Window m_window;
+  bool m_running = true;
 
+  TTF_Font *m_font;
+  std::unique_ptr<Text> m_text;
+  RoadSystem m_roadSystem;
 
-void Window::clear() const {
-  SDL_SetRenderDrawColor(m_renderer, 0, 0, 0, 255);
-  SDL_RenderClear(m_renderer);
-}
+  TrafficGenerator m_generator;
+  std::vector<Vehicle *> m_vehicles;
+  Uint64 m_lastSpawnTime;
+};
 
-void Window::present() const {
-  SDL_RenderPresent(m_renderer);
-}
+#endif // !MAIN_H

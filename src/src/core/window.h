@@ -10,6 +10,8 @@ public:
   ~Window();
 
   // To disble copy operator and assignment
+  // this is done to ensure two instance of the Window is not create and make some bad things happen
+
   Window(const Window &) = delete;
   Window &operator=(const Window &) = delete;
 
