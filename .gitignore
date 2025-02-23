@@ -1,33 +1,99 @@
-# Compiled object files
+# Prerequisites
+*.d
+
+# Compiled Object files
 *.o
 *.obj
 
-# SDL build artifacts
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
 *.so
-*.dll
 *.dylib
-*.a
-*.lib
+*.dll
 
-# CMake build directory
+# Executables
+*.exe
+*.out
+*.app
+
+# Build directories
 build/
+bin/
+obj/
+Debug/
+Release/
 
-# Local libraries
-libs/
-
-# Debug and log files
-*.log
-*.dbg
-*.stackdump
+# Dependency directories
+deps/
 
 # IDE specific files
 .vscode/
 .idea/
-*.code-workspace
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+*.ncb
+*.sdf
 
-# MacOS
+# CMake build files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+install_manifest.txt
+CTestTestfile.cmake
+Testing/
+
+# Autotools build files
+autom4te.cache/
+aclocal.m4
+compile
+config.guess
+config.h
+config.h.in
+config.log
+config.status
+config.sub
+configure
+depcomp
+install-sh
+libtool
+ltmain.sh
+missing
+stamp-h1
+
+# Git submodule (SDL is already tracked by Git, so no need to ignore it)
+# However, if you have other submodules, you might want to ignore their build files
+# Example:
+# submodules/SDL/build/
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+
+# OS generated files
 .DS_Store
-
-# Windows
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
+# Editor temporary files
+*~
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# Miscellaneous
+*.orig
+*.rej
