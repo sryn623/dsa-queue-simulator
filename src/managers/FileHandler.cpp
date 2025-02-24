@@ -53,35 +53,60 @@ void FileHandler::initializeFileSystem() {
     }
 }
 
+// In FileHandler.cpp
 std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> FileHandler::readNewVehicles() {
     std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> newVehicles;
     std::lock_guard<std::mutex> lock(fileMutex);
 
     for (const auto& [laneId, filepath] : laneFiles) {
-        if (!std::filesystem::exists(filepath)) continue;
+        try {
+            if (!std::filesystem::exists(filepath)) continue;
 
-        std::ifstream file(filepath);
-        if (!file) continue;
+            std::ifstream file(filepath);
+            if (!file) continue;
 
-        // Check file size
-        file.seekg(0, std::ios::end);
-        int64_t fileSize = file.tellg();
-        int64_t lastPos = lastReadPositions[filepath];
-
-        if (fileSize > lastPos) {
-            file.seekg(lastPos);
             std::string line;
-
+            std::vector<std::string> lines;
             while (std::getline(file, line)) {
-                if (line.empty()) continue;
-
-                auto vehicle = parseVehicleLine(line, laneId);
-                if (vehicle) {
-                    newVehicles.emplace_back(laneId, vehicle);
+                if (!line.empty()) {
+                    lines.push_back(line);
                 }
             }
 
-            lastReadPositions[filepath] = file.tellg();
+            // Clear file after reading
+            file.close();
+            std::ofstream clearFile(filepath, std::ios::trunc);
+
+            // Process lines
+            for (const auto& line : lines) {
+                size_t commaPos = line.find(',');
+                size_t semicolonPos = line.find(';');
+
+                if (commaPos != std::string::npos && semicolonPos != std::string::npos) {
+                    try {
+                        uint32_t id = std::stoul(line.substr(0, commaPos));
+                        char dirChar = line[commaPos + 1];
+
+                        Direction dir;
+                        switch (dirChar) {
+                            case 'S': dir = Direction::STRAIGHT; break;
+                            case 'L': dir = Direction::LEFT; break;
+                            case 'R': dir = Direction::RIGHT; break;
+                            default: continue;
+                        }
+
+                        auto vehicle = std::make_shared<Vehicle>(id, dir, laneId);
+                        newVehicles.emplace_back(laneId, vehicle);
+
+                        std::cout << "Read vehicle " << id << " from " << filepath
+                                 << " with direction " << static_cast<int>(dir) << std::endl;
+                    } catch (const std::exception& e) {
+                        std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
+                    }
+                }
+            }
+        } catch (const std::exception& e) {
+            std::cerr << "Error reading file " << filepath << ": " << e.what() << std::endl;
         }
     }
 

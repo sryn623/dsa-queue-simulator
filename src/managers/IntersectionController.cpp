@@ -144,6 +144,7 @@ float IntersectionController::calculateAverageWaitingVehicles() const {
     size_t totalVehicles = 0;
     size_t normalLaneCount = 0;
 
+    // Only count vehicles in normal lanes (not free or priority lanes)
     for (const auto& lane : lanes) {
         if (!isFreeLane(lane->getId()) && !lane->isPriorityLane()) {
             totalVehicles += lane->getQueueSize();
@@ -156,17 +157,32 @@ float IntersectionController::calculateAverageWaitingVehicles() const {
 }
 
 float IntersectionController::calculateProcessingTime() const {
-    // Total processing time = |V| * t where t is BASE_VEHICLE_PROCESS_TIME
+    // According to assignment formula: T = |V| * t
+    // where |V| = average number of waiting vehicles
+    // and t = 2 seconds per vehicle
+
+    if (isPriorityMode) {
+        // In priority mode, only process priority lane
+        Lane* priorityLane = getPriorityLane();
+        if (priorityLane) {
+            return priorityLane->getQueueSize() * SimConstants::VEHICLE_PROCESS_TIME;
+        }
+        return 0.0f;
+    }
+
+    // In normal mode, calculate average of normal lanes
+    // |V| = 1/n Σ|Li| where n is number of normal lanes
     float avgVehicles = calculateAverageWaitingVehicles();
-    return avgVehicles * BASE_VEHICLE_PROCESS_TIME;
+    return avgVehicles * SimConstants::VEHICLE_PROCESS_TIME;
 }
+
 
 bool IntersectionController::shouldSwitchToNormalMode() const {
     if (!isPriorityMode) return false;
 
     Lane* priorityLane = getPriorityLane();
     return priorityLane &&
-           priorityLane->getQueueSize() <= PRIORITY_RELEASE_THRESHOLD &&
+           priorityLane->getQueueSize() <= SimConstants::NORMAL_THRESHOLD &&
            stateTimer >= MIN_STATE_TIME;
 }
 
@@ -175,7 +191,7 @@ bool IntersectionController::shouldSwitchToPriorityMode() const {
 
     Lane* priorityLane = getPriorityLane();
     return priorityLane &&
-           priorityLane->getQueueSize() > PRIORITY_THRESHOLD &&
+           priorityLane->getQueueSize() > SimConstants::PRIORITY_THRESHOLD &&
            stateTimer >= MIN_STATE_TIME;
 }
 

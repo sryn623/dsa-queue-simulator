@@ -98,6 +98,7 @@ bool TrafficManager::isNearIntersection(const VehicleState& state) const {
     return distance < threshold;
 }
 
+
 bool TrafficManager::isInIntersection(const Position& pos) const {
     using namespace SimConstants;
     float dx = pos.x - CENTER_X;
@@ -108,39 +109,51 @@ bool TrafficManager::isInIntersection(const Position& pos) const {
 
 // TrafficManager.cpp continuation
 
-void TrafficManager::updateVehiclePositions(float deltaTime) {
-    auto it = activeVehicles.begin();
-    while (it != activeVehicles.end()) {
-        auto& state = it->second;
 
-        if (!state.isMoving) {
-            if (canVehicleMove(state)) {
-                state.isMoving = true;
-                if (state.direction != Direction::STRAIGHT) {
-                    calculateTurnPath(state);
-                }
-            } else {
-                updateVehicleQueuePosition(state, state.vehicle->getCurrentLane(), state.queuePosition);
-                ++it;
-                continue;
+void TrafficManager::updateVehiclePositions(float deltaTime) {
+    for (auto& [_, state] : activeVehicles) {
+        if (!state.isMoving && canVehicleMove(state)) {
+            state.isMoving = true;
+            if (state.direction != Direction::STRAIGHT) {
+                calculateTurnPath(state);
             }
         }
 
-        // Update movement based on direction
-        if (state.direction == Direction::STRAIGHT) {
-            updateStraightMovement(state, deltaTime);
-        } else {
-            updateTurningMovement(state, deltaTime);
-        }
+        if (state.isMoving) {
+            float dx = state.targetPos.x - state.pos.x;
+            float dy = state.targetPos.y - state.pos.y;
+            float distance = std::sqrt(dx * dx + dy * dy);
 
-        // Check if vehicle has reached destination
-        if (hasReachedDestination(state)) {
-            it = activeVehicles.erase(it);
-            totalVehiclesProcessed++;
-        } else {
-            ++it;
+            if (distance > 0.1f) {
+                // Calculate speed and movement
+                float speedFactor = 1.0f;
+                if (isInIntersection(state.pos)) {
+                    speedFactor = 1.2f; // Faster through intersection
+                } else {
+                    float distToIntersection = std::abs(distance - SimConstants::ROAD_WIDTH);
+                    if (distToIntersection < SimConstants::ROAD_WIDTH) {
+                        speedFactor = 0.7f + (distToIntersection / SimConstants::ROAD_WIDTH) * 0.3f;
+                    }
+                }
+
+                float currentSpeed = state.speed * speedFactor * deltaTime;
+                float moveX = state.pos.x + (dx / distance) * currentSpeed;
+                float moveY = state.pos.y + (dy / distance) * currentSpeed;
+
+                // Check for collision before moving
+                if (!checkCollision(state, moveX, moveY)) {
+                    state.pos.x = moveX;
+                    state.pos.y = moveY;
+                    state.turnAngle = std::atan2(dy, dx);
+                } else {
+                    state.speed *= 0.5f; // Slow down when near collision
+                }
+            }
         }
     }
+
+    // Clean up vehicles that have reached their destination
+    cleanupRemovedVehicles();
 }
 
 void TrafficManager::updateStraightMovement(VehicleState& state, float deltaTime) {
@@ -187,18 +200,19 @@ void TrafficManager::updateTurningMovement(VehicleState& state, float deltaTime)
     }
 
     if (state.hasStartedTurn) {
-        // Calculate smooth turn progression
+        // Smooth turn progression
         float progressDelta = deltaTime * (1.0f - state.turnProgress * 0.5f);
         state.turnProgress = std::min(1.0f, state.turnProgress + progressDelta);
 
-        // Cubic easing for smoother turns
+        // Use cubic easing for smoother turns
         float easedProgress = state.turnProgress * state.turnProgress * (3.0f - 2.0f * state.turnProgress);
         float currentAngle = state.startAngle + (state.endAngle - state.startAngle) * easedProgress;
 
+        // Calculate new position along turn arc
         float newX = state.turnCenter.x + state.turnRadius * std::cos(currentAngle);
         float newY = state.turnCenter.y + state.turnRadius * std::sin(currentAngle);
 
-        // Look ahead for potential collisions
+        // Look ahead for collisions
         bool willCollide = false;
         const int LOOK_AHEAD_STEPS = 5;
         for (int i = 1; i <= LOOK_AHEAD_STEPS; i++) {
@@ -218,42 +232,34 @@ void TrafficManager::updateTurningMovement(VehicleState& state, float deltaTime)
             state.pos.y = newY;
             state.turnAngle = currentAngle;
             state.inIntersection = true;
-            state.isPassing = true;
         } else {
-            state.speed *= 0.8f; // Slow down more during turns if collision likely
+            state.speed *= 0.8f; // Slow down if collision likely
         }
     } else {
         updateStraightMovement(state, deltaTime);
     }
 }
 
-bool TrafficManager::checkCollision(const VehicleState& state, float newX, float newY) const {
-    const float MIN_DISTANCE = SimConstants::VEHICLE_WIDTH * 1.5f;
-    const float INTERSECTION_MARGIN = SimConstants::VEHICLE_WIDTH * 2.0f;
 
-    // Check collision with all other vehicles
+bool TrafficManager::checkCollision(const VehicleState& state, float newX, float newY) const {
+    const float MIN_DISTANCE = SimConstants::VEHICLE_WIDTH * 2.0f;
+    const float INTERSECTION_MARGIN = SimConstants::VEHICLE_WIDTH * 2.5f;
+
     for (const auto& [otherId, otherState] : activeVehicles) {
         if (otherId != state.vehicle->getId()) {
             float dx = newX - otherState.pos.x;
             float dy = newY - otherState.pos.y;
             float distance = std::sqrt(dx * dx + dy * dy);
 
-            // Use larger margin in intersection
             float requiredDistance = isInIntersection(Position(newX, newY)) ?
                                    INTERSECTION_MARGIN : MIN_DISTANCE;
 
-            // Check angles between vehicles
-            float angleA = std::atan2(dy, dx);
-            float angleDiff = std::abs(angleA - otherState.turnAngle);
-            if (angleDiff > static_cast<float>(M_PI)) {
-                angleDiff = 2.0f * static_cast<float>(M_PI) - angleDiff;
+            // Increase margin if both vehicles are moving
+            if (state.isMoving && otherState.isMoving) {
+                requiredDistance *= 1.2f;
             }
 
-            // Increase margin for crossing paths
-            if (angleDiff > static_cast<float>(M_PI) / 4.0f) {
-                requiredDistance *= 1.5f;
-            }
-
+            // Check for collision
             if (distance < requiredDistance) {
                 return true;
             }
@@ -266,6 +272,7 @@ void TrafficManager::addNewVehicleToState(std::shared_ptr<Vehicle> vehicle, Lane
     using namespace SimConstants;
 
     VehicleState state;
+    state.vehicle = vehicle;
     state.speed = VEHICLE_BASE_SPEED;
     state.isMoving = false;
     state.direction = vehicle->getDirection();
@@ -276,53 +283,95 @@ void TrafficManager::addNewVehicleToState(std::shared_ptr<Vehicle> vehicle, Lane
     state.inIntersection = false;
     state.isPassing = false;
 
-    // Calculate spawn position
-    size_t queuePosition = getLaneSize(laneId);
-    float backOffset = QUEUE_START_OFFSET + (queuePosition * QUEUE_SPACING);
-    float laneOffset = static_cast<float>((static_cast<int>(laneId) % 3)) * LANE_WIDTH;
-
-    // Set initial position based on lane
-    switch (laneId) {
-        case LaneId::AL1_INCOMING:
-        case LaneId::AL2_PRIORITY:
-        case LaneId::AL3_FREELANE:
-            state.pos.x = -backOffset;
-            state.pos.y = CENTER_Y - ROAD_WIDTH / 2.0f + LANE_WIDTH / 2.0f + laneOffset;
-            state.turnAngle = 0.0f;
+    // Calculate lane offset based on lane type
+    float laneOffset;
+    switch(static_cast<int>(laneId) % 3) {
+        case 0: // First lane
+            laneOffset = -ROAD_WIDTH/3.0f;
             break;
-
-        case LaneId::BL1_INCOMING:
-        case LaneId::BL2_NORMAL:
-        case LaneId::BL3_FREELANE:
-            state.pos.y = -backOffset;
-            state.pos.x = CENTER_X - ROAD_WIDTH / 2.0f + LANE_WIDTH / 2.0f + laneOffset;
-            state.turnAngle = 90.0f;
+        case 1: // Second lane (middle)
+            laneOffset = 0.0f;
             break;
-
-        case LaneId::CL1_INCOMING:
-        case LaneId::CL2_NORMAL:
-        case LaneId::CL3_FREELANE:
-            state.pos.x = backOffset;
-            state.pos.y = CENTER_Y + ROAD_WIDTH / 2.0f - LANE_WIDTH / 2.0f - laneOffset;
-            state.turnAngle = 180.0f;
-            break;
-
-        case LaneId::DL1_INCOMING:
-        case LaneId::DL2_NORMAL:
-        case LaneId::DL3_FREELANE:
-            state.pos.y = backOffset;
-            state.pos.x = CENTER_X + ROAD_WIDTH / 2.0f - LANE_WIDTH / 2.0f - laneOffset;
-            state.turnAngle = -90.0f;
+        case 2: // Third lane
+            laneOffset = ROAD_WIDTH/3.0f;
             break;
     }
 
-    state.queuePosition = queuePosition;
-    calculateTargetPosition(state, laneId);
+    // Set spawn position based on approach direction
+    if (laneId <= LaneId::AL3_FREELANE) {
+        // West approach
+        state.pos.x = -VEHICLE_WIDTH * 2;
+        state.pos.y = CENTER_Y + laneOffset;
+        state.turnAngle = 0.0f;
+        // Target position calculation
+        state.targetPos.x = CENTER_X - ROAD_WIDTH/2.0f - VEHICLE_WIDTH;
+        state.targetPos.y = state.pos.y;
+    }
+    else if (laneId <= LaneId::BL3_FREELANE) {
+        // North approach
+        state.pos.x = CENTER_X + laneOffset;
+        state.pos.y = -VEHICLE_HEIGHT * 2;
+        state.turnAngle = static_cast<float>(M_PI) / 2.0f;
+        // Target position calculation
+        state.targetPos.x = state.pos.x;
+        state.targetPos.y = CENTER_Y - ROAD_WIDTH/2.0f - VEHICLE_HEIGHT;
+    }
+    else if (laneId <= LaneId::CL3_FREELANE) {
+        // East approach
+        state.pos.x = WINDOW_WIDTH + VEHICLE_WIDTH * 2;
+        state.pos.y = CENTER_Y + laneOffset;
+        state.turnAngle = static_cast<float>(M_PI);
+        // Target position calculation
+        state.targetPos.x = CENTER_X + ROAD_WIDTH/2.0f + VEHICLE_WIDTH;
+        state.targetPos.y = state.pos.y;
+    }
+    else {
+        // South approach
+        state.pos.x = CENTER_X + laneOffset;
+        state.pos.y = WINDOW_HEIGHT + VEHICLE_HEIGHT * 2;
+        state.turnAngle = -static_cast<float>(M_PI) / 2.0f;
+        // Target position calculation
+        state.targetPos.x = state.pos.x;
+        state.targetPos.y = CENTER_Y + ROAD_WIDTH/2.0f + VEHICLE_HEIGHT;
+    }
+
+    // Calculate queue position offset
+    size_t queuePosition = getLaneSize(laneId);
+    float queueOffset = queuePosition * (VEHICLE_LENGTH + VEHICLE_MIN_SPACING);
+
+    // Adjust spawn position based on queue
+    switch(laneId) {
+        case LaneId::AL1_INCOMING:
+        case LaneId::AL2_PRIORITY:
+        case LaneId::AL3_FREELANE:
+            state.pos.x -= queueOffset;
+            break;
+        case LaneId::BL1_INCOMING:
+        case LaneId::BL2_NORMAL:
+        case LaneId::BL3_FREELANE:
+            state.pos.y -= queueOffset;
+            break;
+        case LaneId::CL1_INCOMING:
+        case LaneId::CL2_NORMAL:
+        case LaneId::CL3_FREELANE:
+            state.pos.x += queueOffset;
+            break;
+        case LaneId::DL1_INCOMING:
+        case LaneId::DL2_NORMAL:
+        case LaneId::DL3_FREELANE:
+            state.pos.y += queueOffset;
+            break;
+    }
+
+    // Add to active vehicles
     activeVehicles[vehicle->getId()] = state;
-}
 
-
-// TrafficManager.cpp continuation
+    std::cout << "Vehicle " << vehicle->getId()
+              << " spawned in lane " << static_cast<int>(laneId)
+              << " at position (" << state.pos.x << ", " << state.pos.y << ")"
+              << " with direction " << static_cast<int>(state.direction)
+              << std::endl;
+}// TrafficManager.cpp continuation
 
 void TrafficManager::updateTrafficLights(float deltaTime) {
     // Update each light's state
@@ -390,59 +439,29 @@ void TrafficManager::handleStateTransition(float deltaTime) {
     }
 }
 
-bool TrafficManager::canVehicleMove(const VehicleState& state) const {
-    LaneId laneId = state.vehicle->getCurrentLane();
 
-    // Free lanes always move
-    if (isFreeLane(laneId)) {
-        return true;
-    }
-
-    // Check if vehicle is first in queue
-    size_t queuePos = 0;
-    for (const auto& [otherId, otherState] : activeVehicles) {
-        if (otherState.vehicle->getCurrentLane() == laneId && otherId != state.vehicle->getId()) {
-            if ((laneId <= LaneId::AL3_FREELANE && otherState.pos.x < state.pos.x) ||
-                (laneId <= LaneId::BL3_FREELANE && otherState.pos.y < state.pos.y) ||
-                (laneId <= LaneId::CL3_FREELANE && otherState.pos.x > state.pos.x) ||
-                (laneId <= LaneId::DL3_FREELANE && otherState.pos.y > state.pos.y)) {
-                queuePos++;
-            }
-        }
-    }
-
-    if (queuePos > 0) {
-        return false; // Not first in queue
-    }
-
-    // Check traffic light
-    auto lightIt = trafficLights.find(laneId);
-    if (lightIt != trafficLights.end()) {
-        return lightIt->second.getState() == LightState::GREEN;
-    }
-
-    // Check parent light for incoming lanes
-    switch (laneId) {
-        case LaneId::AL1_INCOMING:
-            return trafficLights.at(LaneId::AL2_PRIORITY).getState() == LightState::GREEN;
-        case LaneId::BL1_INCOMING:
-            return trafficLights.at(LaneId::BL2_NORMAL).getState() == LightState::GREEN;
-        case LaneId::CL1_INCOMING:
-            return trafficLights.at(LaneId::CL2_NORMAL).getState() == LightState::GREEN;
-        case LaneId::DL1_INCOMING:
-            return trafficLights.at(LaneId::DL2_NORMAL).getState() == LightState::GREEN;
-        default:
-            return false;
-    }
-}
 
 void TrafficManager::processNewVehicles() {
     auto newVehicles = fileHandler.readNewVehicles();
+
     for (const auto& [laneId, vehicle] : newVehicles) {
+        std::cout << "Processing new vehicle " << vehicle->getId()
+                 << " for lane " << static_cast<int>(laneId) << std::endl;
+
         LaneId optimalLane = determineOptimalLane(vehicle->getDirection(), laneId);
 
         if (isValidSpawnLane(optimalLane, vehicle->getDirection())) {
+            // First add to lane queue
             addVehicleToLane(optimalLane, vehicle);
+
+            // Then initialize vehicle state
+            addNewVehicleToState(vehicle, optimalLane);
+
+            std::cout << "Vehicle " << vehicle->getId()
+                     << " added to lane " << static_cast<int>(optimalLane) << std::endl;
+        } else {
+            std::cout << "Invalid spawn configuration for vehicle "
+                     << vehicle->getId() << std::endl;
         }
     }
 }
@@ -658,9 +677,9 @@ float TrafficManager::calculateTurningRadius(Direction dir) const {
     using namespace SimConstants;
     switch (dir) {
         case Direction::LEFT:
-            return TURN_GUIDE_RADIUS * 1.2f;
+            return TURN_GUIDE_RADIUS * 1.2f;  // Wider radius for left turns
         case Direction::RIGHT:
-            return TURN_GUIDE_RADIUS * 0.8f;
+            return TURN_GUIDE_RADIUS * 0.8f;  // Tighter radius for right turns
         default:
             return TURN_GUIDE_RADIUS;
     }
@@ -711,163 +730,363 @@ bool TrafficManager::hasReachedDestination(const VehicleState& state) const {
 
 void TrafficManager::calculateTurnPath(VehicleState& state) {
     using namespace SimConstants;
-
-    // Calculate turn radius based on vehicle's direction
+    float turnOffset = ROAD_WIDTH * 0.25f;
     state.turnRadius = calculateTurningRadius(state.direction);
 
-    // Determine turn center and angles based on current position and direction
-    switch (state.direction) {
-        case Direction::LEFT: {
-            // Left turn calculations
-            if (state.pos.x <= CENTER_X && state.pos.y <= CENTER_Y) {
-                // Quadrant 3 (bottom-left)
-                state.turnCenter = Position(CENTER_X - ROAD_WIDTH/2.0f, CENTER_Y);
-                state.startAngle = 3.0f * M_PI / 2.0f;
-                state.endAngle = M_PI;
-            } else if (state.pos.x >= CENTER_X && state.pos.y <= CENTER_Y) {
-                // Quadrant 4 (bottom-right)
-                state.turnCenter = Position(CENTER_X, CENTER_Y - ROAD_WIDTH/2.0f);
-                state.startAngle = 0.0f;
-                state.endAngle = M_PI / 2.0f;
-            } else if (state.pos.x >= CENTER_X && state.pos.y >= CENTER_Y) {
-                // Quadrant 1 (top-right)
-                state.turnCenter = Position(CENTER_X + ROAD_WIDTH/2.0f, CENTER_Y);
-                state.startAngle = M_PI / 2.0f;
-                state.endAngle = M_PI;
-            } else {
-                // Quadrant 2 (top-left)
-                state.turnCenter = Position(CENTER_X, CENTER_Y + ROAD_WIDTH/2.0f);
-                state.startAngle = M_PI;
-                state.endAngle = 3.0f * M_PI / 2.0f;
-            }
-            break;
-        }
-        case Direction::RIGHT: {
-            // Right turn calculations
-            if (state.pos.x <= CENTER_X && state.pos.y <= CENTER_Y) {
-                // Quadrant 3 (bottom-left)
-                state.turnCenter = Position(CENTER_X, CENTER_Y - ROAD_WIDTH/2.0f);
-                state.startAngle = 3.0f * M_PI / 2.0f;
-                state.endAngle = 2.0f * M_PI;
-            } else if (state.pos.x >= CENTER_X && state.pos.y <= CENTER_Y) {
-                // Quadrant 4 (bottom-right)
-                state.turnCenter = Position(CENTER_X + ROAD_WIDTH/2.0f, CENTER_Y);
-                state.startAngle = M_PI;
-                state.endAngle = 3.0f * M_PI / 2.0f;
-            } else if (state.pos.x >= CENTER_X && state.pos.y >= CENTER_Y) {
-                // Quadrant 1 (top-right)
-                state.turnCenter = Position(CENTER_X, CENTER_Y + ROAD_WIDTH/2.0f);
-                state.startAngle = M_PI / 2.0f;
-                state.endAngle = 0.0f;
-            } else {
-                // Quadrant 2 (top-left)
-                state.turnCenter = Position(CENTER_X - ROAD_WIDTH/2.0f, CENTER_Y);
-                state.startAngle = 0.0f;
-                state.endAngle = M_PI / 2.0f;
-            }
-            break;
-        }
-        default:
-            // For straight movement, no turn path needed
-            return;
-    }
-}
+    LaneId laneId = state.vehicle->getCurrentLane();
+    bool isLeftTurn = state.direction == Direction::LEFT;
 
-void TrafficManager::updateVehicleQueuePosition(VehicleState& state, LaneId laneId, size_t queuePosition) {
-    using namespace SimConstants;
-
-    // Adjust position based on queue position and lane
-    float laneOffset = static_cast<float>((static_cast<int>(laneId) % 3)) * LANE_WIDTH;
-
+    // Set turn center based on lane and turn direction
     switch (laneId) {
         case LaneId::AL1_INCOMING:
         case LaneId::AL2_PRIORITY:
         case LaneId::AL3_FREELANE:
-            state.pos.x = -QUEUE_START_OFFSET - (queuePosition * QUEUE_SPACING);
-            state.pos.y = CENTER_Y - ROAD_WIDTH / 2.0f + LANE_WIDTH / 2.0f + laneOffset;
+            state.turnCenter.x = CENTER_X - ROAD_WIDTH/2.0f + turnOffset;
+            state.turnCenter.y = isLeftTurn ?
+                CENTER_Y - ROAD_WIDTH/2.0f - turnOffset :
+                CENTER_Y + ROAD_WIDTH/2.0f + turnOffset;
+            state.startAngle = 0.0f;
+            state.endAngle = isLeftTurn ? -M_PI/2.0f : M_PI/2.0f;
             break;
 
         case LaneId::BL1_INCOMING:
         case LaneId::BL2_NORMAL:
         case LaneId::BL3_FREELANE:
-            state.pos.y = -QUEUE_START_OFFSET - (queuePosition * QUEUE_SPACING);
-            state.pos.x = CENTER_X - ROAD_WIDTH / 2.0f + LANE_WIDTH / 2.0f + laneOffset;
+            state.turnCenter.x = isLeftTurn ?
+                CENTER_X + ROAD_WIDTH/2.0f + turnOffset :
+                CENTER_X - ROAD_WIDTH/2.0f - turnOffset;
+            state.turnCenter.y = CENTER_Y - ROAD_WIDTH/2.0f + turnOffset;
+            state.startAngle = M_PI/2.0f;
+            state.endAngle = isLeftTurn ? 0.0f : M_PI;
             break;
 
         case LaneId::CL1_INCOMING:
         case LaneId::CL2_NORMAL:
         case LaneId::CL3_FREELANE:
-            state.pos.x = QUEUE_START_OFFSET + (queuePosition * QUEUE_SPACING);
-            state.pos.y = CENTER_Y + ROAD_WIDTH / 2.0f - LANE_WIDTH / 2.0f - laneOffset;
+            state.turnCenter.x = CENTER_X + ROAD_WIDTH/2.0f - turnOffset;
+            state.turnCenter.y = isLeftTurn ?
+                CENTER_Y + ROAD_WIDTH/2.0f + turnOffset :
+                CENTER_Y - ROAD_WIDTH/2.0f - turnOffset;
+            state.startAngle = M_PI;
+            state.endAngle = isLeftTurn ? M_PI/2.0f : -M_PI/2.0f;
             break;
 
         case LaneId::DL1_INCOMING:
         case LaneId::DL2_NORMAL:
         case LaneId::DL3_FREELANE:
-            state.pos.y = QUEUE_START_OFFSET + (queuePosition * QUEUE_SPACING);
-            state.pos.x = CENTER_X + ROAD_WIDTH / 2.0f - LANE_WIDTH / 2.0f - laneOffset;
+            state.turnCenter.x = isLeftTurn ?
+                CENTER_X - ROAD_WIDTH/2.0f - turnOffset :
+                CENTER_X + ROAD_WIDTH/2.0f + turnOffset;
+            state.turnCenter.y = CENTER_Y + ROAD_WIDTH/2.0f - turnOffset;
+            state.startAngle = -M_PI/2.0f;
+            state.endAngle = isLeftTurn ? M_PI : 0.0f;
             break;
     }
+}
 
-    // Update queue position tracking
-    state.queuePosition = queuePosition;
+// Add these implementations to TrafficManager.cpp
+
+void TrafficManager::updateVehicleQueuePosition(VehicleState& state, LaneId laneId, size_t queuePosition) {
+    using namespace SimConstants;
+
+    float laneOffset = static_cast<float>((static_cast<int>(laneId) % 3)) * LANE_WIDTH;
+    float queueOffset = QUEUE_START_OFFSET + (queuePosition * QUEUE_SPACING);
+
+    // Calculate target position based on lane
+    switch (laneId) {
+        case LaneId::AL1_INCOMING:
+        case LaneId::AL2_PRIORITY:
+        case LaneId::AL3_FREELANE: {
+            state.pos.x = CENTER_X - queueOffset;
+            state.pos.y = CENTER_Y - ROAD_WIDTH/2.0f + LANE_WIDTH/2.0f + laneOffset;
+            state.turnAngle = 0.0f;
+            break;
+        }
+        case LaneId::BL1_INCOMING:
+        case LaneId::BL2_NORMAL:
+        case LaneId::BL3_FREELANE: {
+            state.pos.x = CENTER_X - ROAD_WIDTH/2.0f + LANE_WIDTH/2.0f + laneOffset;
+            state.pos.y = CENTER_Y - queueOffset;
+            state.turnAngle = static_cast<float>(M_PI) / 2.0f;
+            break;
+        }
+        case LaneId::CL1_INCOMING:
+        case LaneId::CL2_NORMAL:
+        case LaneId::CL3_FREELANE: {
+            state.pos.x = CENTER_X + queueOffset;
+            state.pos.y = CENTER_Y - ROAD_WIDTH/2.0f + LANE_WIDTH/2.0f + laneOffset;
+            state.turnAngle = static_cast<float>(M_PI);
+            break;
+        }
+        case LaneId::DL1_INCOMING:
+        case LaneId::DL2_NORMAL:
+        case LaneId::DL3_FREELANE: {
+            state.pos.x = CENTER_X - ROAD_WIDTH/2.0f + LANE_WIDTH/2.0f + laneOffset;
+            state.pos.y = CENTER_Y + queueOffset;
+            state.turnAngle = -static_cast<float>(M_PI) / 2.0f;
+            break;
+        }
+    }
 }
 
 void TrafficManager::calculateTargetPosition(VehicleState& state, LaneId laneId) {
-    // Calculate target endpoint for the vehicle
-    state.targetPos = calculateLaneEndpoint(laneId);
+    using namespace SimConstants;
 
-    // For turning vehicles, adjust target based on turn direction
-    if (state.direction != Direction::STRAIGHT) {
-        // Additional offset for turn paths
-        float turnOffset = SimConstants::VEHICLE_WIDTH * 1.5f;
+    // Determine target lane based on vehicle's intended direction
+    LaneId targetLane = determineTargetLane(laneId, state.direction);
 
-        switch (state.direction) {
-            case Direction::LEFT: {
-                // Adjust target position for left turns in different quadrants
-                if (state.pos.x <= SimConstants::CENTER_X && state.pos.y <= SimConstants::CENTER_Y) {
-                    // Bottom-left quadrant
-                    state.targetPos.x -= turnOffset;
-                    state.targetPos.y -= turnOffset;
-                } else if (state.pos.x >= SimConstants::CENTER_X && state.pos.y <= SimConstants::CENTER_Y) {
-                    // Bottom-right quadrant
-                    state.targetPos.x += turnOffset;
-                    state.targetPos.y -= turnOffset;
-                } else if (state.pos.x >= SimConstants::CENTER_X && state.pos.y >= SimConstants::CENTER_Y) {
-                    // Top-right quadrant
-                    state.targetPos.x += turnOffset;
-                    state.targetPos.y += turnOffset;
-                } else {
-                    // Top-left quadrant
-                    state.targetPos.x -= turnOffset;
-                    state.targetPos.y += turnOffset;
-                }
-                break;
+    // Calculate final position based on target lane
+    switch(state.direction) {
+        case Direction::STRAIGHT:
+            if (laneId <= LaneId::AL3_FREELANE) {
+                state.targetPos.x = WINDOW_WIDTH + VEHICLE_WIDTH;
+                state.targetPos.y = state.pos.y;
+            } else if (laneId <= LaneId::BL3_FREELANE) {
+                state.targetPos.x = state.pos.x;
+                state.targetPos.y = WINDOW_HEIGHT + VEHICLE_HEIGHT;
+            } else if (laneId <= LaneId::CL3_FREELANE) {
+                state.targetPos.x = -VEHICLE_WIDTH;
+                state.targetPos.y = state.pos.y;
+            } else {
+                state.targetPos.x = state.pos.x;
+                state.targetPos.y = -VEHICLE_HEIGHT;
             }
-            case Direction::RIGHT: {
-                // Adjust target position for right turns in different quadrants
-                if (state.pos.x <= SimConstants::CENTER_X && state.pos.y <= SimConstants::CENTER_Y) {
-                    // Bottom-left quadrant
-                    state.targetPos.x += turnOffset;
-                    state.targetPos.y += turnOffset;
-                } else if (state.pos.x >= SimConstants::CENTER_X && state.pos.y <= SimConstants::CENTER_Y) {
-                    // Bottom-right quadrant
-                    state.targetPos.x -= turnOffset;
-                    state.targetPos.y += turnOffset;
-                } else if (state.pos.x >= SimConstants::CENTER_X && state.pos.y >= SimConstants::CENTER_Y) {
-                    // Top-right quadrant
-                    state.targetPos.x -= turnOffset;
-                    state.targetPos.y -= turnOffset;
-                } else {
-                    // Top-left quadrant
-                    state.targetPos.x += turnOffset;
-                    state.targetPos.y -= turnOffset;
-                }
-                break;
+            break;
+
+        case Direction::LEFT:
+            // Must use third lane for left turns
+            if (static_cast<int>(laneId) % 3 != 2) {
+                changeLaneToFree(state);
             }
-            default:
-                // For STRAIGHT or unexpected directions, no adjustment
-                break;
+            calculateLeftTurnPath(state);
+            break;
+
+        case Direction::RIGHT:
+            // Must use first lane for right turns
+            if (static_cast<int>(laneId) % 3 != 0) {
+                changeLaneToFirst(state);
+            }
+            calculateRightTurnPath(state);
+            break;
+    }
+}
+
+
+LaneId TrafficManager::determineTargetLane(LaneId currentLane, Direction direction) const {
+    // Return appropriate target lane based on current lane and intended direction
+    switch(direction) {
+        case Direction::LEFT:
+            // Third lane only for left turns
+            switch(currentLane) {
+                case LaneId::AL3_FREELANE: return LaneId::BL3_FREELANE;
+                case LaneId::BL3_FREELANE: return LaneId::CL3_FREELANE;
+                case LaneId::CL3_FREELANE: return LaneId::DL3_FREELANE;
+                case LaneId::DL3_FREELANE: return LaneId::AL3_FREELANE;
+                default: return currentLane; // Should not happen
+            }
+
+        case Direction::RIGHT:
+            // First lane only for right turns
+            switch(currentLane) {
+                case LaneId::AL1_INCOMING: return LaneId::DL1_INCOMING;
+                case LaneId::BL1_INCOMING: return LaneId::AL1_INCOMING;
+                case LaneId::CL1_INCOMING: return LaneId::BL1_INCOMING;
+                case LaneId::DL1_INCOMING: return LaneId::CL1_INCOMING;
+                default: return currentLane;
+            }
+
+        default: // STRAIGHT
+            // Can use first or second lane
+            return currentLane;
+    }
+}
+
+
+void TrafficManager::changeLaneToFree(VehicleState& state) {
+    // Logic to smoothly change to free lane for left turns
+    float targetLaneY = state.pos.y;
+    if (state.pos.x < SimConstants::CENTER_X) targetLaneY += SimConstants::LANE_WIDTH;
+    else targetLaneY -= SimConstants::LANE_WIDTH;
+
+    state.intermediateTargets.push_back({state.pos.x, targetLaneY});
+}
+
+void TrafficManager::changeLaneToFirst(VehicleState& state) {
+    // Logic to smoothly change to first lane for right turns
+    float targetLaneY = state.pos.y;
+    if (state.pos.x < SimConstants::CENTER_X) targetLaneY -= SimConstants::LANE_WIDTH;
+    else targetLaneY += SimConstants::LANE_WIDTH;
+
+    state.intermediateTargets.push_back({state.pos.x, targetLaneY});
+}
+
+
+
+bool TrafficManager::canVehicleMove(const VehicleState& state) const {
+    using namespace SimConstants;  // Add this for constant access
+
+    // Check traffic light state
+    auto lightIt = trafficLights.find(state.vehicle->getCurrentLane());
+    if (lightIt != trafficLights.end() && lightIt->second.getState() == LightState::RED
+        && !state.inIntersection) {
+        // Handle red light stop
+        float distToIntersection = getDistanceToIntersection(state);
+        if (distToIntersection < STOP_LINE_OFFSET) {
+            return false;
         }
     }
+
+    return !hasVehicleAhead(state);
+}
+
+LightState TrafficManager::getLightStateForLane(LaneId laneId) const {
+    auto it = trafficLights.find(laneId);
+    return it != trafficLights.end() ? it->second.getState() : LightState::RED;
+}
+
+float TrafficManager::getDistanceToIntersection(const VehicleState& state) const {
+    using namespace SimConstants;
+
+    float dx = CENTER_X - state.pos.x;
+    float dy = CENTER_Y - state.pos.y;
+    return std::sqrt(dx * dx + dy * dy) - INTERSECTION_RADIUS;
+}
+
+bool TrafficManager::hasVehicleAhead(const VehicleState& state) const {
+    for (const auto& [_, otherState] : activeVehicles) {
+        if (state.vehicle->getId() != otherState.vehicle->getId() &&
+            state.vehicle->getCurrentLane() == otherState.vehicle->getCurrentLane()) {
+
+            float dx = otherState.pos.x - state.pos.x;
+            float dy = otherState.pos.y - state.pos.y;
+            float distance = std::sqrt(dx * dx + dy * dy);
+
+            if (distance < SimConstants::VEHICLE_MIN_SPACING &&
+                isVehicleAhead(state, otherState)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool TrafficManager::isVehicleAhead(const VehicleState& first,
+                                  const VehicleState& second) const {
+    // Determine if second vehicle is ahead of first based on road direction
+    LaneId laneId = first.vehicle->getCurrentLane();
+
+    if (laneId <= LaneId::AL3_FREELANE) {
+        return second.pos.x > first.pos.x;
+    } else if (laneId <= LaneId::BL3_FREELANE) {
+        return second.pos.y > first.pos.y;
+    } else if (laneId <= LaneId::CL3_FREELANE) {
+        return second.pos.x < first.pos.x;
+    } else {
+        return second.pos.y < first.pos.y;
+    }
+}
+
+
+void TrafficManager::calculateLeftTurnPath(VehicleState& state) {
+    using namespace SimConstants;
+
+    // Calculate larger radius for left turns
+    state.turnRadius = TURN_GUIDE_RADIUS * 1.2f;
+
+    // Calculate turn center and angles based on approach direction
+    LaneId laneId = state.vehicle->getCurrentLane();
+
+    if (laneId <= LaneId::AL3_FREELANE) {  // Coming from West
+        // Turn center will be north-west of intersection
+        state.turnCenter.x = CENTER_X - ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y - ROAD_WIDTH/2.0f;
+        state.startAngle = 0.0f;  // Start facing east
+        state.endAngle = -M_PI/2.0f;  // End facing north
+        state.targetPos.x = CENTER_X;
+        state.targetPos.y = -VEHICLE_HEIGHT;  // Exit north
+    }
+    else if (laneId <= LaneId::BL3_FREELANE) {  // Coming from North
+        // Turn center will be north-east of intersection
+        state.turnCenter.x = CENTER_X + ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y - ROAD_WIDTH/2.0f;
+        state.startAngle = M_PI/2.0f;  // Start facing south
+        state.endAngle = 0.0f;  // End facing east
+        state.targetPos.x = WINDOW_WIDTH + VEHICLE_WIDTH;  // Exit east
+        state.targetPos.y = CENTER_Y;
+    }
+    else if (laneId <= LaneId::CL3_FREELANE) {  // Coming from East
+        // Turn center will be south-east of intersection
+        state.turnCenter.x = CENTER_X + ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y + ROAD_WIDTH/2.0f;
+        state.startAngle = M_PI;  // Start facing west
+        state.endAngle = M_PI/2.0f;  // End facing south
+        state.targetPos.x = CENTER_X;
+        state.targetPos.y = WINDOW_HEIGHT + VEHICLE_HEIGHT;  // Exit south
+    }
+    else {  // Coming from South
+        // Turn center will be south-west of intersection
+        state.turnCenter.x = CENTER_X - ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y + ROAD_WIDTH/2.0f;
+        state.startAngle = -M_PI/2.0f;  // Start facing north
+        state.endAngle = M_PI;  // End facing west
+        state.targetPos.x = -VEHICLE_WIDTH;  // Exit west
+        state.targetPos.y = CENTER_Y;
+    }
+
+    // Adjust speed for turning
+    state.speed = VEHICLE_TURN_SPEED;
+    state.turnProgress = 0.0f;
+    state.hasStartedTurn = true;
+}
+
+void TrafficManager::calculateRightTurnPath(VehicleState& state) {
+    using namespace SimConstants;
+
+    // Calculate smaller radius for right turns
+    state.turnRadius = TURN_GUIDE_RADIUS * 0.8f;
+
+    // Calculate turn center and angles based on approach direction
+    LaneId laneId = state.vehicle->getCurrentLane();
+
+    if (laneId <= LaneId::AL3_FREELANE) {  // Coming from West
+        // Turn center will be south-west of intersection
+        state.turnCenter.x = CENTER_X - ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y + ROAD_WIDTH/2.0f;
+        state.startAngle = 0.0f;  // Start facing east
+        state.endAngle = M_PI/2.0f;  // End facing south
+        state.targetPos.x = CENTER_X;
+        state.targetPos.y = WINDOW_HEIGHT + VEHICLE_HEIGHT;  // Exit south
+    }
+    else if (laneId <= LaneId::BL3_FREELANE) {  // Coming from North
+        // Turn center will be north-west of intersection
+        state.turnCenter.x = CENTER_X - ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y - ROAD_WIDTH/2.0f;
+        state.startAngle = M_PI/2.0f;  // Start facing south
+        state.endAngle = M_PI;  // End facing west
+        state.targetPos.x = -VEHICLE_WIDTH;  // Exit west
+        state.targetPos.y = CENTER_Y;
+    }
+    else if (laneId <= LaneId::CL3_FREELANE) {  // Coming from East
+        // Turn center will be north-east of intersection
+        state.turnCenter.x = CENTER_X + ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y - ROAD_WIDTH/2.0f;
+        state.startAngle = M_PI;  // Start facing west
+        state.endAngle = -M_PI/2.0f;  // End facing north
+        state.targetPos.x = CENTER_X;
+        state.targetPos.y = -VEHICLE_HEIGHT;  // Exit north
+    }
+    else {  // Coming from South
+        // Turn center will be south-east of intersection
+        state.turnCenter.x = CENTER_X + ROAD_WIDTH/2.0f;
+        state.turnCenter.y = CENTER_Y + ROAD_WIDTH/2.0f;
+        state.startAngle = -M_PI/2.0f;  // Start facing north
+        state.endAngle = 0.0f;  // End facing east
+        state.targetPos.x = WINDOW_WIDTH + VEHICLE_WIDTH;  // Exit east
+        state.targetPos.y = CENTER_Y;
+    }
+
+    // Adjust speed for turning
+    state.speed = VEHICLE_TURN_SPEED;
+    state.turnProgress = 0.0f;
+    state.hasStartedTurn = true;
 }
