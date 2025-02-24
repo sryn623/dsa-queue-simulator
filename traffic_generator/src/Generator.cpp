@@ -2,61 +2,61 @@
 // traffic_generator/src/Generator.cpp
 #include "../include/Generator.h"
 
+
+
+    static const std::string BASE_PATH;
+
 Generator::Generator() : nextVehicleId(1) {
     try {
-        // Initialize RNG
         std::random_device rd;
         rng.seed(rd());
         lastGenTime = std::chrono::steady_clock::now();
 
-        // Set up data directory
-        dataDir = std::filesystem::current_path() / "data" / "lanes";
+        // Set up data directory directly
+        dataDir = (std::filesystem::current_path() / "data" / "lanes").lexically_normal();
+        std::cout << "Generator using absolute path: " << dataDir << std::endl;
+
         std::filesystem::create_directories(dataDir);
 
-        // Initialize lane settings
-        initializeLaneSettings();
-
-        // Initialize lane files
+        // Initialize lane files with absolute paths
         laneFiles = {
-            {LaneId::AL1_INCOMING, dataDir / "lane_a1.txt"},
-            {LaneId::AL2_PRIORITY, dataDir / "lane_a2.txt"},
-            {LaneId::AL3_FREELANE, dataDir / "lane_a3.txt"},
-            {LaneId::BL1_INCOMING, dataDir / "lane_b1.txt"},
-            {LaneId::BL2_NORMAL, dataDir / "lane_b2.txt"},
-            {LaneId::BL3_FREELANE, dataDir / "lane_b3.txt"},
-            {LaneId::CL1_INCOMING, dataDir / "lane_c1.txt"},
-            {LaneId::CL2_NORMAL, dataDir / "lane_c2.txt"},
-            {LaneId::CL3_FREELANE, dataDir / "lane_c3.txt"},
-            {LaneId::DL1_INCOMING, dataDir / "lane_d1.txt"},
-            {LaneId::DL2_NORMAL, dataDir / "lane_d2.txt"},
-            {LaneId::DL3_FREELANE, dataDir / "lane_d3.txt"}
+            {LaneId::AL1_INCOMING, (dataDir / "lane_a1.txt").lexically_normal()},
+            {LaneId::AL2_PRIORITY, (dataDir / "lane_a2.txt").lexically_normal()},
+            {LaneId::AL3_FREELANE, (dataDir / "lane_a3.txt").lexically_normal()},
+            {LaneId::BL1_INCOMING, (dataDir / "lane_b1.txt").lexically_normal()},
+            {LaneId::BL2_NORMAL,   (dataDir / "lane_b2.txt").lexically_normal()},
+            {LaneId::BL3_FREELANE, (dataDir / "lane_b3.txt").lexically_normal()},
+            {LaneId::CL1_INCOMING, (dataDir / "lane_c1.txt").lexically_normal()},
+            {LaneId::CL2_NORMAL,   (dataDir / "lane_c2.txt").lexically_normal()},
+            {LaneId::CL3_FREELANE, (dataDir / "lane_c3.txt").lexically_normal()},
+            {LaneId::DL1_INCOMING, (dataDir / "lane_d1.txt").lexically_normal()},
+            {LaneId::DL2_NORMAL,   (dataDir / "lane_d2.txt").lexically_normal()},
+            {LaneId::DL3_FREELANE, (dataDir / "lane_d3.txt").lexically_normal()}
         };
 
+        // Clear and initialize files
         clearAllFiles();
-        std::cout << "Traffic Generator initialized. Data directory: " << dataDir << std::endl;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error initializing Generator: " << e.what() << std::endl;
+
+        // Verify files were created
+        for (const auto& [_, filepath] : laneFiles) {
+            std::ofstream testWrite(filepath, std::ios::app);
+            if (!testWrite) {
+                throw std::runtime_error("Cannot write to " + filepath.string());
+            }
+            testWrite.close();
+
+            std::ifstream testRead(filepath);
+            if (!testRead) {
+                throw std::runtime_error("Cannot read from " + filepath.string());
+            }
+            testRead.close();
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Generator initialization failed: " << e.what() << std::endl;
         throw;
     }
 }
 
-void Generator::initializeLaneSettings() {
-    laneSettings = {
-        {LaneId::AL1_INCOMING, {0.25, 12, "A1 (Left Incoming)"}},
-        {LaneId::AL2_PRIORITY, {0.3, 15, "A2 (Left Priority)"}},
-        {LaneId::AL3_FREELANE, {0.2, 8, "A3 (Left Free)"}},
-        {LaneId::BL1_INCOMING, {0.25, 12, "B1 (Top Incoming)"}},
-        {LaneId::BL2_NORMAL, {0.25, 12, "B2 (Top Normal)"}},
-        {LaneId::BL3_FREELANE, {0.2, 8, "B3 (Top Free)"}},
-        {LaneId::CL1_INCOMING, {0.25, 12, "C1 (Right Incoming)"}},
-        {LaneId::CL2_NORMAL, {0.25, 12, "C2 (Right Normal)"}},
-        {LaneId::CL3_FREELANE, {0.2, 8, "C3 (Right Free)"}},
-        {LaneId::DL1_INCOMING, {0.25, 12, "D1 (Bottom Incoming)"}},
-        {LaneId::DL2_NORMAL, {0.25, 12, "D2 (Bottom Normal)"}},
-        {LaneId::DL3_FREELANE, {0.2, 8, "D3 (Bottom Free)"}}
-    };
-}
 
 void Generator::clearAllFiles() {
     for (const auto& [_, filepath] : laneFiles) {
@@ -65,12 +65,30 @@ void Generator::clearAllFiles() {
             if (!file) {
                 throw std::runtime_error("Failed to clear file: " + filepath.string());
             }
+            std::cout << "Cleared file: " << filepath << std::endl;
         }
         catch (const std::exception& e) {
             std::cerr << "Error clearing file: " << e.what() << std::endl;
             throw;
         }
     }
+}
+
+void Generator::initializeLaneSettings() {
+    laneSettings.clear();  // Clear existing settings first
+
+    laneSettings[LaneId::AL1_INCOMING] = {0.12, 12, "A1 (West Incoming)"};
+    laneSettings[LaneId::AL2_PRIORITY] = {0.15, 15, "A2 (West Priority)"};
+    laneSettings[LaneId::AL3_FREELANE] = {0.10, 8, "A3 (West Free)"};
+    laneSettings[LaneId::BL1_INCOMING] = {0.12, 12, "B1 (North Incoming)"};
+    laneSettings[LaneId::BL2_NORMAL] = {0.12, 12, "B2 (North Normal)"};
+    laneSettings[LaneId::BL3_FREELANE] = {0.10, 8, "B3 (North Free)"};
+    laneSettings[LaneId::CL1_INCOMING] = {0.12, 12, "C1 (East Incoming)"};
+    laneSettings[LaneId::CL2_NORMAL] = {0.12, 12, "C2 (East Normal)"};
+    laneSettings[LaneId::CL3_FREELANE] = {0.10, 8, "C3 (East Free)"};
+    laneSettings[LaneId::DL1_INCOMING] = {0.12, 12, "D1 (South Incoming)"};
+    laneSettings[LaneId::DL2_NORMAL] = {0.12, 12, "D2 (South Normal)"};
+    laneSettings[LaneId::DL3_FREELANE] = {0.10, 8, "D3 (South Free)"};
 }
 
 Direction Generator::generateRandomDirection() {
@@ -83,58 +101,36 @@ Direction Generator::generateRandomDirection() {
     return Direction::RIGHT;
 }
 
+
 void Generator::writeVehicleToFile(const std::filesystem::path& filepath, uint32_t id, Direction dir) {
+    std::lock_guard<std::mutex> lock(fileMutex);
     try {
-        std::ofstream file(filepath.string(), std::ios::app);
+        std::ofstream file(filepath, std::ios::app);
         if (!file) {
-            throw std::runtime_error("Failed to open file: " + filepath.string());
+            throw std::runtime_error("Cannot open file for writing: " + filepath.string());
         }
 
         char dirChar;
-        std::string dirStr;
         switch (dir) {
-            case Direction::STRAIGHT:
-                dirChar = 'S';
-                dirStr = "Straight";
-                break;
-            case Direction::LEFT:
-                dirChar = 'L';
-                dirStr = "Left";
-                break;
-            case Direction::RIGHT:
-                dirChar = 'R';
-                dirStr = "Right";
-                break;
-            default:
-                dirChar = 'S';
-                dirStr = "Straight";
+            case Direction::STRAIGHT: dirChar = 'S'; break;
+            case Direction::LEFT:     dirChar = 'L'; break;
+            case Direction::RIGHT:    dirChar = 'R'; break;
+            default:                  dirChar = 'S'; break;
         }
 
-        file << id << "," << dirChar << ";\n";
+        std::string data = std::to_string(id) + "," + dirChar + ";\n";
+        file << data;
         file.flush();
 
-        // Find lane name for display
-        auto laneIt = std::find_if(laneFiles.begin(), laneFiles.end(),
-            [&filepath](const auto& pair) { return pair.second == filepath; });
+        std::cout << "Successfully wrote to " << filepath << ": " << data;
+        std::cout << "Current file size: " << std::filesystem::file_size(filepath) << " bytes" << std::endl;
 
-        if (laneIt != laneFiles.end()) {
-            const auto& settings = laneSettings[laneIt->first];
-            size_t currentCount = countVehiclesInFile(filepath);
-
-            std::cout << std::setw(4) << id << " | "
-                     << std::setw(20) << settings.name << " | "
-                     << std::setw(10) << dirStr << " | "
-                     << "Vehicles: " << currentCount << "/"
-                     << settings.maxVehicles << std::endl;
-        }
-    }
-    catch (const std::exception& e) {
-        std::cerr << "Error writing to file: " << e.what() << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "Error writing to file " << filepath << ": " << e.what() << std::endl;
     }
 }
 
-
-size_t Generator::countVehiclesInFile(const std::filesystem::path& filepath) const {  // Made const
+size_t Generator::countVehiclesInFile(const std::filesystem::path& filepath) const {
     try {
         std::ifstream file(filepath.string());
         if (!file) return 0;
@@ -145,8 +141,7 @@ size_t Generator::countVehiclesInFile(const std::filesystem::path& filepath) con
             if (!line.empty()) count++;
         }
         return count;
-    }
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         std::cerr << "Error counting vehicles in file: " << e.what() << std::endl;
         return 0;
     }
@@ -165,82 +160,57 @@ bool Generator::shouldGenerateVehicle(LaneId laneId, size_t currentCount) {
 // In Generator.cpp, update the generateTraffic function:
 void Generator::generateTraffic() {
     try {
-        // Get current time
+        // Check timing
         auto currentTime = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             currentTime - lastGenTime).count();
 
-        // Add minimum delay between generations
-        if (elapsed < 1000) { // 1 second minimum delay
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000 - elapsed));
+        // Increased minimum delay between generations to 2 seconds
+        if (elapsed < 2000) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2000 - elapsed));
             return;
-        }
-
-        // Clear screen and reprint header periodically
-        static int updateCounter = 0;
-        if (updateCounter++ % 20 == 0) {
-            std::cout << "\033[2J\033[H";  // Clear screen and move cursor to top
-            std::cout << "Traffic Generator Started\n"
-                     << "========================\n\n"
-                     << std::setw(4) << "ID" << " | "
-                     << std::setw(20) << "Lane" << " | "
-                     << std::setw(10) << "Direction" << " | "
-                     << "Status\n"
-                     << "-----+--------------------+------------+--------\n";
         }
 
         std::uniform_real_distribution<> dist(0.0, 1.0);
         bool anyVehicleGenerated = false;
 
         for (const auto& [laneId, filepath] : laneFiles) {
-            std::atomic<bool> fileAccessTimeout{false};
-            std::thread timeoutThread([&fileAccessTimeout]() {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                fileAccessTimeout = true;
-            });
-            timeoutThread.detach();
+            size_t currentVehicles = countVehiclesInFile(filepath);
 
-            try {
-                double spawnProbability;
-                int maxVehicles;
+            double spawnProbability;
+            int maxVehicles;
 
-                // Set spawn probabilities and max vehicles per lane
-                switch (laneId) {
-                    case LaneId::AL2_PRIORITY:
-                        spawnProbability = 0.15;  // 15% chance for priority lane
-                        maxVehicles = 15;
-                        break;
-                    case LaneId::AL3_FREELANE:
-                    case LaneId::BL3_FREELANE:
-                    case LaneId::CL3_FREELANE:
-                    case LaneId::DL3_FREELANE:
-                        spawnProbability = 0.1;   // 10% chance for free lanes
-                        maxVehicles = 8;
-                        break;
-                    default:
-                        spawnProbability = 0.12;  // 12% chance for normal lanes
-                        maxVehicles = 12;
-                        break;
-                }
-
-                // Check if file is accessible
-                if (fileAccessTimeout) {
-                    std::cerr << "Timeout accessing file: " << filepath << std::endl;
-                    continue;
-                }
-
-                size_t currentVehicles = countVehiclesInFile(filepath);
-
-                if (currentVehicles < maxVehicles && dist(rng) < spawnProbability) {
-                    Direction dir = generateRandomDirection();
-                    writeVehicleToFile(filepath, nextVehicleId, dir);
-                    anyVehicleGenerated = true;
-                    nextVehicleId++;
-                }
+            // Set spawn probabilities and max vehicles per lane
+            switch (laneId) {
+                case LaneId::AL2_PRIORITY:
+                    spawnProbability = 0.15;  // 15% chance for priority lane
+                    maxVehicles = 15;
+                    break;
+                case LaneId::AL3_FREELANE:
+                case LaneId::BL3_FREELANE:
+                case LaneId::CL3_FREELANE:
+                case LaneId::DL3_FREELANE:
+                    spawnProbability = 0.1;   // 10% chance for free lanes
+                    maxVehicles = 8;
+                    break;
+                default:
+                    spawnProbability = 0.12;  // 12% chance for normal lanes
+                    maxVehicles = 12;
+                    break;
             }
-            catch (const std::exception& e) {
-                std::cerr << "Error processing lane: " << e.what() << std::endl;
-                continue;
+
+            // Check if we should generate a vehicle for this lane
+            if (currentVehicles < maxVehicles && dist(rng) < spawnProbability) {
+                Direction dir = generateRandomDirection();
+                writeVehicleToFile(filepath, nextVehicleId++, dir);
+                anyVehicleGenerated = true;
+
+                // Log vehicle generation
+                std::cout << "Generated vehicle " << (nextVehicleId-1)
+                         << " in lane " << static_cast<int>(laneId)
+                         << " with direction " << static_cast<int>(dir)
+                         << " (Current vehicles: " << currentVehicles << "/"
+                         << maxVehicles << ")" << std::endl;
             }
         }
 
@@ -250,11 +220,17 @@ void Generator::generateTraffic() {
         if (!anyVehicleGenerated) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-    }
-    catch (const std::exception& e) {
+
+        // Display current stats periodically
+        static int updateCounter = 0;
+        if (++updateCounter % 10 == 0) {
+            displayStatus();
+        }
+    } catch (const std::exception& e) {
         std::cerr << "Error in traffic generation: " << e.what() << std::endl;
     }
 }
+
 
 
 void Generator::displayStatus() const {
