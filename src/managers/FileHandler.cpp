@@ -1,194 +1,152 @@
+// FileHandler.cpp
 #include "managers/FileHandler.h"
 #include <fstream>
 #include <sstream>
-#include <filesystem>
 #include <iostream>
-
-
+#include <iomanip>
 
 const std::string FileHandler::BASE_PATH = "data/lanes";
 
-// FileHandler Constructor
 FileHandler::FileHandler() {
     try {
-        // Get absolute path for data directory
-        dataDir = (std::filesystem::current_path() / BASE_PATH).lexically_normal();
-        std::cout << "FileHandler using absolute path: " << dataDir << std::endl;
-
-        // Initialize lane files with absolute paths
-        laneFiles = {
-            {LaneId::AL1_INCOMING, (dataDir / "lane_a1.txt").lexically_normal()},
-            {LaneId::AL2_PRIORITY, (dataDir / "lane_a2.txt").lexically_normal()},
-            {LaneId::AL3_FREELANE, (dataDir / "lane_a3.txt").lexically_normal()},
-            {LaneId::BL1_INCOMING, (dataDir / "lane_b1.txt").lexically_normal()},
-            {LaneId::BL2_NORMAL,   (dataDir / "lane_b2.txt").lexically_normal()},
-            {LaneId::BL3_FREELANE, (dataDir / "lane_b3.txt").lexically_normal()},
-            {LaneId::CL1_INCOMING, (dataDir / "lane_c1.txt").lexically_normal()},
-            {LaneId::CL2_NORMAL,   (dataDir / "lane_c2.txt").lexically_normal()},
-            {LaneId::CL3_FREELANE, (dataDir / "lane_c3.txt").lexically_normal()},
-            {LaneId::DL1_INCOMING, (dataDir / "lane_d1.txt").lexically_normal()},
-            {LaneId::DL2_NORMAL,   (dataDir / "lane_d2.txt").lexically_normal()},
-            {LaneId::DL3_FREELANE, (dataDir / "lane_d3.txt").lexically_normal()}
-        };
-
-        // Create data directory if it doesn't exist
-        std::filesystem::create_directories(dataDir);
-
-        // Verify all files exist and are readable
-        for (const auto& [laneId, filepath] : laneFiles) {
-            std::cout << "Checking file for lane " << static_cast<int>(laneId)
-                     << ": " << filepath << std::endl;
-
-            // Create file if it doesn't exist
-            if (!std::filesystem::exists(filepath)) {
-                std::cout << "File does not exist, creating: " << filepath << std::endl;
-                std::ofstream createFile(filepath);
-                if (!createFile) {
-                    throw std::runtime_error("Cannot create file: " + filepath.string());
-                }
-                createFile.close();
-            }
-
-            // Verify read access
-            std::ifstream testRead(filepath);
-            if (!testRead) {
-                throw std::runtime_error("Cannot read from " + filepath.string());
-            }
-            testRead.close();
-
-            // Initialize read position
-            lastReadPositions[filepath] = 0;
-
-            std::cout << "Successfully verified file: " << filepath << std::endl;
-        }
-
-        std::cout << "FileHandler successfully initialized" << std::endl;
-        std::cout << "Data directory: " << dataDir << std::endl;
-        std::cout << "Number of lanes: " << laneFiles.size() << std::endl;
-
+        initializeFileSystem();
     } catch (const std::exception& e) {
         std::cerr << "FileHandler initialization failed: " << e.what() << std::endl;
         throw;
     }
-}// src/managers/FileHandler.cpp
+}
+
+void FileHandler::initializeFileSystem() {
+    // Setup data directory path
+    dataDir = (std::filesystem::current_path() / BASE_PATH).lexically_normal();
+    std::cout << "FileHandler using path: " << dataDir << std::endl;
+
+    // Initialize lane file paths
+    laneFiles = {
+        {LaneId::AL1_INCOMING, (dataDir / "lane_a1.txt").lexically_normal()},
+        {LaneId::AL2_PRIORITY, (dataDir / "lane_a2.txt").lexically_normal()},
+        {LaneId::AL3_FREELANE, (dataDir / "lane_a3.txt").lexically_normal()},
+        {LaneId::BL1_INCOMING, (dataDir / "lane_b1.txt").lexically_normal()},
+        {LaneId::BL2_NORMAL,   (dataDir / "lane_b2.txt").lexically_normal()},
+        {LaneId::BL3_FREELANE, (dataDir / "lane_b3.txt").lexically_normal()},
+        {LaneId::CL1_INCOMING, (dataDir / "lane_c1.txt").lexically_normal()},
+        {LaneId::CL2_NORMAL,   (dataDir / "lane_c2.txt").lexically_normal()},
+        {LaneId::CL3_FREELANE, (dataDir / "lane_c3.txt").lexically_normal()},
+        {LaneId::DL1_INCOMING, (dataDir / "lane_d1.txt").lexically_normal()},
+        {LaneId::DL2_NORMAL,   (dataDir / "lane_d2.txt").lexically_normal()},
+        {LaneId::DL3_FREELANE, (dataDir / "lane_d3.txt").lexically_normal()}
+    };
+
+    // Create directory structure
+    std::filesystem::create_directories(dataDir);
+
+    // Initialize all files
+    for (const auto& [laneId, filepath] : laneFiles) {
+        if (!std::filesystem::exists(filepath)) {
+            std::ofstream file(filepath);
+            if (!file) {
+                throw std::runtime_error("Cannot create file: " + filepath.string());
+            }
+        }
+        lastReadPositions[filepath] = 0;
+        lastCheckTimes[filepath] = std::chrono::steady_clock::now();
+    }
+}
+
 std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> FileHandler::readNewVehicles() {
     std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> newVehicles;
-
-    std::cout << "\n=== Reading Vehicle Files ===" << std::endl;
+    std::lock_guard<std::mutex> lock(fileMutex);
 
     for (const auto& [laneId, filepath] : laneFiles) {
-        std::cout << "Checking file: " << filepath << std::endl;
+        if (!std::filesystem::exists(filepath)) continue;
 
-        if (!std::filesystem::exists(filepath)) {
-            std::cerr << "File does not exist: " << filepath << std::endl;
-            continue;
-        }
+        std::ifstream file(filepath);
+        if (!file) continue;
 
-        std::ifstream file(filepath.string(), std::ios::in);
-        if (!file) {
-            std::cerr << "Cannot open file: " << filepath << std::endl;
-            continue;
-        }
-
-        // Get file size
+        // Check file size
         file.seekg(0, std::ios::end);
         int64_t fileSize = file.tellg();
-        std::cout << "File size: " << fileSize << " bytes" << std::endl;
-        std::cout << "Last read position: " << lastReadPositions[filepath] << std::endl;
+        int64_t lastPos = lastReadPositions[filepath];
 
-        if (fileSize > lastReadPositions[filepath]) {
-            file.seekg(lastReadPositions[filepath]);
+        if (fileSize > lastPos) {
+            file.seekg(lastPos);
             std::string line;
 
             while (std::getline(file, line)) {
-                std::cout << "Reading line: " << line << std::endl;
-
-                // Skip empty lines
                 if (line.empty()) continue;
 
-                // Parse vehicle data (format: "ID,Direction;")
-                size_t commaPos = line.find(',');
-                size_t semicolonPos = line.find(';');
-
-                if (commaPos != std::string::npos && semicolonPos != std::string::npos) {
-                    try {
-                        // Parse ID
-                        uint32_t id = std::stoul(line.substr(0, commaPos));
-
-                        // Parse direction
-                        char dirChar = line[commaPos + 1];
-                        Direction dir;
-                        switch (dirChar) {
-                            case 'S': dir = Direction::STRAIGHT; break;
-                            case 'L': dir = Direction::LEFT; break;
-                            case 'R': dir = Direction::RIGHT; break;
-                            default:
-                                std::cerr << "Invalid direction character: " << dirChar << std::endl;
-                                continue;
-                        }
-
-                        std::cout << "Creating vehicle: ID=" << id
-                                 << ", Direction=" << static_cast<int>(dir)
-                                 << ", Lane=" << static_cast<int>(laneId) << std::endl;
-
-                        auto vehicle = std::make_shared<Vehicle>(id, dir, laneId);
-                        newVehicles.emplace_back(laneId, vehicle);
-                    } catch (const std::exception& e) {
-                        std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
-                    }
-                } else {
-                    std::cerr << "Invalid line format: " << line << std::endl;
+                auto vehicle = parseVehicleLine(line, laneId);
+                if (vehicle) {
+                    newVehicles.emplace_back(laneId, vehicle);
                 }
             }
 
             lastReadPositions[filepath] = file.tellg();
-            std::cout << "Updated read position to: " << lastReadPositions[filepath] << std::endl;
         }
     }
 
-    std::cout << "Found " << newVehicles.size() << " new vehicles" << std::endl;
     return newVehicles;
 }
 
+std::shared_ptr<Vehicle> FileHandler::parseVehicleLine(const std::string& line, LaneId laneId) {
+    size_t commaPos = line.find(',');
+    size_t semicolonPos = line.find(';');
 
-std::vector<std::shared_ptr<Vehicle>> FileHandler::parseVehicleData(
-    const std::string& data, LaneId laneId) {
-    std::vector<std::shared_ptr<Vehicle>> vehicles;
-    std::stringstream ss(data);
-    std::string vehicleData;
-
-    while (std::getline(ss, vehicleData, ';')) {
-        if (vehicleData.empty()) continue;
-
-        // Expected format: "id,direction"
-        std::stringstream vehicleSS(vehicleData);
-        std::string idStr, dirStr;
-
-        if (std::getline(vehicleSS, idStr, ',') &&
-            std::getline(vehicleSS, dirStr, ',')) {
-            try {
-                uint32_t id = std::stoul(idStr);
-                Direction dir;
-
-                if (dirStr == "S") dir = Direction::STRAIGHT;
-                else if (dirStr == "L") dir = Direction::LEFT;
-                else if (dirStr == "R") dir = Direction::RIGHT;
-                else continue;
-
-                vehicles.push_back(std::make_shared<Vehicle>(id, dir, laneId));
-            } catch (...) {
-                // Skip invalid data
-                continue;
-            }
-        }
+    if (commaPos == std::string::npos || semicolonPos == std::string::npos) {
+        return nullptr;
     }
 
-    return vehicles;
+    try {
+        uint32_t id = std::stoul(line.substr(0, commaPos));
+        char dirChar = line[commaPos + 1];
+
+        Direction dir;
+        switch (dirChar) {
+            case 'S': dir = Direction::STRAIGHT; break;
+            case 'L': dir = Direction::LEFT; break;
+            case 'R': dir = Direction::RIGHT; break;
+            default: return nullptr;
+        }
+
+        return std::make_shared<Vehicle>(id, dir, laneId);
+    } catch (const std::exception& e) {
+        std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
+        return nullptr;
+    }
 }
 
 void FileHandler::clearLaneFiles() {
+    std::lock_guard<std::mutex> lock(fileMutex);
+
     for (const auto& [_, filepath] : laneFiles) {
         std::ofstream file(filepath, std::ios::trunc);
         lastReadPositions[filepath] = 0;
     }
+}
+
+size_t FileHandler::getVehicleCountInFile(LaneId laneId) const {
+    auto it = laneFiles.find(laneId);
+    if (it == laneFiles.end()) return 0;
+
+    try {
+        std::ifstream file(it->second);
+        if (!file) return 0;
+
+        size_t count = 0;
+        std::string line;
+        while (std::getline(file, line)) {
+            if (!line.empty()) count++;
+        }
+        return count;
+    } catch (const std::exception& e) {
+        std::cerr << "Error counting vehicles: " << e.what() << std::endl;
+        return 0;
+    }
+}
+
+void FileHandler::handleFileError(const std::string& operation,
+                                const std::filesystem::path& filepath,
+                                const std::exception& e) const {
+    std::cerr << "File " << operation << " error for " << filepath
+              << ": " << e.what() << std::endl;
 }

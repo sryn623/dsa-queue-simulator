@@ -1,5 +1,4 @@
 // src/visualization/DebugOverlay.cpp
-#define _USE_MATH_DEFINES
 #include <cmath>
 #include "visualization/DebugOverlay.h"
 

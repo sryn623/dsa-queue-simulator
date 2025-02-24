@@ -1,5 +1,4 @@
 
-#define _USE_MATH_DEFINES
 
 #include "visualization/Renderer.h"
 #include <iostream>
@@ -287,111 +286,148 @@ void Renderer::renderTrafficLight(float x, float y, float rotation, LightState s
 }
 
 void Renderer::renderTrafficLights(const std::map<LaneId, TrafficLight>& lights) {
-    // For each traffic light position in the intersection...
-    for (const auto& position : trafficLightPositions) {
-        // Find the corresponding light state
-        auto lightIt = lights.find(position.laneId);
-        if (lightIt != lights.end()) {
-            // Render one individual traffic light
+    using namespace SimConstants;
+
+    // Define the standard positions for traffic lights
+    struct LightPosition {
+        float x;
+        float y;
+        float rotation;
+        LaneId laneId;
+    };
+
+    // Define fixed positions for each traffic light
+    const LightPosition positions[] = {
+        // West approach (AL2 - Priority lane)
+        {
+            static_cast<float>(CENTER_X - ROAD_WIDTH/2.0f - 50.0f),
+            static_cast<float>(CENTER_Y - LIGHT_SIZE * 3.0f),
+            0.0f,
+            LaneId::AL2_PRIORITY
+        },
+        // North approach (BL2)
+        {
+            static_cast<float>(CENTER_X - LIGHT_SIZE * 3.0f),
+            static_cast<float>(CENTER_Y - ROAD_WIDTH/2.0f - 50.0f),
+            90.0f * static_cast<float>(M_PI) / 180.0f,
+            LaneId::BL2_NORMAL
+        },
+        // East approach (CL2)
+        {
+            static_cast<float>(CENTER_X + ROAD_WIDTH/2.0f + 50.0f),
+            static_cast<float>(CENTER_Y - LIGHT_SIZE * 3.0f),
+            180.0f * static_cast<float>(M_PI) / 180.0f,
+            LaneId::CL2_NORMAL
+        },
+        // South approach (DL2)
+        {
+            static_cast<float>(CENTER_X - LIGHT_SIZE * 3.0f),
+            static_cast<float>(CENTER_Y + ROAD_WIDTH/2.0f + 50.0f),
+            270.0f * static_cast<float>(M_PI) / 180.0f,
+            LaneId::DL2_NORMAL
+        }
+    };
+
+    // Render each traffic light
+    for (const auto& position : positions) {
+        auto it = lights.find(position.laneId);
+        if (it != lights.end()) {
             renderTrafficLight(
                 position.x,
                 position.y,
                 position.rotation,
-                lightIt->second.getState()
+                it->second.getState()
             );
         }
     }
 }
 
+
 void Renderer::renderVehicles(const std::map<uint32_t, VehicleState>& vehicles) {
     for (const auto& [id, state] : vehicles) {
-        float angle = calculateTurningAngle(state);
         renderVehicle(
-            state.x, state.y,
+            state.pos.x,          // Use pos.x instead of x
+            state.pos.y,          // Use pos.y instead of y
             state.direction,
             state.vehicle->getCurrentLane() == LaneId::AL2_PRIORITY,
-            angle,
+            state.turnAngle,
             state.isMoving
         );
     }
 }
 
-void Renderer::renderVehicle(float x, float y, Direction dir, bool isPriority,
-                           float angle, bool isMoving) {
+void Renderer::renderVehicle(float x, float y, Direction dir, bool isPriority, float angle, bool isMoving) {
     const float halfWidth = VEHICLE_WIDTH / 2.0f;
     const float halfHeight = VEHICLE_HEIGHT / 2.0f;
 
-    float cosAngle = cosf(angle);
-    float sinAngle = sinf(angle);
-
-    // Calculate vehicle corner positions
-    SDL_FPoint vertices[4] = {
-        {x + (-halfWidth * cosAngle - halfHeight * sinAngle),
-         y + (-halfWidth * sinAngle + halfHeight * cosAngle)},
-        {x + (halfWidth * cosAngle - halfHeight * sinAngle),
-         y + (halfWidth * sinAngle + halfHeight * cosAngle)},
-        {x + (halfWidth * cosAngle + halfHeight * sinAngle),
-         y + (halfWidth * sinAngle - halfHeight * cosAngle)},
-        {x + (-halfWidth * cosAngle + halfHeight * sinAngle),
-         y + (-halfWidth * sinAngle - halfHeight * cosAngle)}
+    // Create a smoother vehicle shape
+    SDL_FPoint vertices[8] = {
+        // Front
+        {x + (halfWidth * 0.8f) * cosf(angle), y + (halfWidth * 0.8f) * sinf(angle)},
+        // Front right
+        {x + halfWidth * cosf(angle + 0.4f), y + halfWidth * sinf(angle + 0.4f)},
+        // Right
+        {x + halfWidth * cosf(angle + M_PI/2), y + halfWidth * sinf(angle + M_PI/2)},
+        // Back right
+        {x + halfWidth * cosf(angle + M_PI - 0.4f), y + halfWidth * sinf(angle + M_PI - 0.4f)},
+        // Back
+        {x - (halfWidth * 0.8f) * cosf(angle), y - (halfWidth * 0.8f) * sinf(angle)},
+        // Back left
+        {x + halfWidth * cosf(angle + M_PI + 0.4f), y + halfWidth * sinf(angle + M_PI + 0.4f)},
+        // Left
+        {x + halfWidth * cosf(angle - M_PI/2), y + halfWidth * sinf(angle - M_PI/2)},
+        // Front left
+        {x + halfWidth * cosf(angle - 0.4f), y + halfWidth * sinf(angle - 0.4f)}
     };
 
-    // Draw vehicle shadow
+    // Draw shadow
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 100);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 8; i++) {
         SDL_RenderLine(renderer,
             vertices[i].x + 2, vertices[i].y + 2,
-            vertices[(i + 1) % 4].x + 2, vertices[(i + 1) % 4].y + 2
-        );
+            vertices[(i + 1) % 8].x + 2, vertices[(i + 1) % 8].y + 2);
     }
 
-    // Draw vehicle body with appropriate color
+    // Vehicle body color
     if (isPriority) {
-        SDL_SetRenderDrawColor(renderer, 255, 69, 0, 255); // Orange for priority
+        SDL_SetRenderDrawColor(renderer, 255, 140, 0, 255); // Orange for priority
     } else {
-        SDL_SetRenderDrawColor(renderer, 65, 105, 225, 255); // Blue for normal
-    }
-// Draw vehicle outline
-    for (int i = 0; i < 4; i++) {
-        SDL_RenderLine(renderer, vertices[i].x, vertices[i].y,
-                      vertices[(i + 1) % 4].x, vertices[(i + 1) % 4].y);
+        SDL_SetRenderDrawColor(renderer, 30, 144, 255, 255); // Blue for normal
     }
 
-    // Draw direction indicator (front arrow)
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-    float arrowLength = VEHICLE_WIDTH * 0.4f;
-    float endX = x + arrowLength * cosf(angle);
-    float endY = y + arrowLength * sinf(angle);
-    SDL_RenderLine(renderer, x, y, endX, endY);
+    // Draw vehicle body
+    for (int i = 0; i < 8; i++) {
+        SDL_RenderLine(renderer,
+            vertices[i].x, vertices[i].y,
+            vertices[(i + 1) % 8].x, vertices[(i + 1) % 8].y);
+    }
 
-    // Draw turn signal indicators if vehicle is turning
+    // Draw headlights
+    SDL_SetRenderDrawColor(renderer, 255, 255, 200, 255);
+    renderCircle(vertices[0].x - 5 * cosf(angle + 0.2f),
+                vertices[0].y - 5 * sinf(angle + 0.2f), 3);
+    renderCircle(vertices[0].x - 5 * cosf(angle - 0.2f),
+                vertices[0].y - 5 * sinf(angle - 0.2f), 3);
+
+    // Direction indicators
     if (dir != Direction::STRAIGHT) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 200); // Yellow for turn signals
-        float signalSize = 4.0f;
-        float signalOffset = halfWidth * 0.8f;
-
+        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 200);
         if (dir == Direction::LEFT) {
-            float leftX = x + (-signalOffset * cosAngle - signalOffset * sinAngle);
-            float leftY = y + (-signalOffset * sinAngle + signalOffset * cosAngle);
-            renderCircle(leftX, leftY, signalSize);
-        } else if (dir == Direction::RIGHT) {
-            float rightX = x + (signalOffset * cosAngle - signalOffset * sinAngle);
-            float rightY = y + (signalOffset * sinAngle + signalOffset * cosAngle);
-            renderCircle(rightX, rightY, signalSize);
+            renderCircle(vertices[6].x, vertices[6].y, 4);
+        } else {
+            renderCircle(vertices[2].x, vertices[2].y, 4);
         }
     }
 
-    // Add movement trail effect for moving vehicles
+    // Movement trail
     if (isMoving) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 128);
-        float speed = 2.0f;
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 50);
         float t = static_cast<float>(SDL_GetTicks()) / 1000.0f;
-        float offset = (sinf(t * speed) + 1.0f) * 5.0f;
-
-        for (int i = 0; i < 3; i++) {
-            float trailX = x - (i + 1) * offset * cosf(angle);
-            float trailY = y - (i + 1) * offset * sinf(angle);
-            renderCircle(trailX, trailY, 2.0f);
+        for (int i = 1; i <= 3; i++) {
+            float offset = i * (5.0f + sinf(t * 4.0f) * 2.0f);
+            float trailX = x - offset * cosf(angle);
+            float trailY = y - offset * sinf(angle);
+            renderCircle(trailX, trailY, 2);
         }
     }
 }
@@ -626,7 +662,9 @@ void Renderer::cleanup() {
 }
 
 float Renderer::calculateTurningAngle(const VehicleState& state) const {
-    return atan2f(state.targetY - state.y, state.targetX - state.x);
+    float dx = state.targetPos.x - state.pos.x;
+    float dy = state.targetPos.y - state.pos.y;
+    return std::atan2f(dy, dx);
 }
 
 SDL_Color Renderer::getLaneColor(LaneId laneId, bool isActive) const {
