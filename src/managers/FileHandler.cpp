@@ -1,9 +1,7 @@
-// FileHandler.cpp
 #include "managers/FileHandler.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
-#include <iomanip>
 
 const std::string FileHandler::BASE_PATH = "data/lanes";
 
@@ -48,12 +46,9 @@ void FileHandler::initializeFileSystem() {
                 throw std::runtime_error("Cannot create file: " + filepath.string());
             }
         }
-        lastReadPositions[filepath] = 0;
-        lastCheckTimes[filepath] = std::chrono::steady_clock::now();
     }
 }
 
-// In FileHandler.cpp
 std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> FileHandler::readNewVehicles() {
     std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> newVehicles;
     std::lock_guard<std::mutex> lock(fileMutex);
@@ -79,30 +74,9 @@ std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> FileHandler::readNewVeh
 
             // Process lines
             for (const auto& line : lines) {
-                size_t commaPos = line.find(',');
-                size_t semicolonPos = line.find(';');
-
-                if (commaPos != std::string::npos && semicolonPos != std::string::npos) {
-                    try {
-                        uint32_t id = std::stoul(line.substr(0, commaPos));
-                        char dirChar = line[commaPos + 1];
-
-                        Direction dir;
-                        switch (dirChar) {
-                            case 'S': dir = Direction::STRAIGHT; break;
-                            case 'L': dir = Direction::LEFT; break;
-                            case 'R': dir = Direction::RIGHT; break;
-                            default: continue;
-                        }
-
-                        auto vehicle = std::make_shared<Vehicle>(id, dir, laneId);
-                        newVehicles.emplace_back(laneId, vehicle);
-
-                        std::cout << "Read vehicle " << id << " from " << filepath
-                                 << " with direction " << static_cast<int>(dir) << std::endl;
-                    } catch (const std::exception& e) {
-                        std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
-                    }
+                auto vehicle = parseVehicleLine(line, laneId);
+                if (vehicle) {
+                    newVehicles.emplace_back(laneId, vehicle);
                 }
             }
         } catch (const std::exception& e) {
@@ -145,7 +119,6 @@ void FileHandler::clearLaneFiles() {
 
     for (const auto& [_, filepath] : laneFiles) {
         std::ofstream file(filepath, std::ios::trunc);
-        lastReadPositions[filepath] = 0;
     }
 }
 
@@ -170,8 +143,8 @@ size_t FileHandler::getVehicleCountInFile(LaneId laneId) const {
 }
 
 void FileHandler::handleFileError(const std::string& operation,
-                                const std::filesystem::path& filepath,
-                                const std::exception& e) const {
+                                  const std::filesystem::path& filepath,
+                                  const std::exception& e) const {
     std::cerr << "File " << operation << " error for " << filepath
               << ": " << e.what() << std::endl;
 }

@@ -28,38 +28,13 @@ void IntersectionController::update(float deltaTime) {
         } else {
             processNormalLanes();
         }
+        processFreeLanes();
         processingTimer = 0.0f;
     }
-
-    // Always process free lanes
-    processFreeLanes();
 
     // Check wait times and update priorities
     checkWaitTimes();
     updateLaneQueue();
-}
-
-void IntersectionController::updateTimers(float deltaTime) {
-    stateTimer += deltaTime;
-    elapsedTime += deltaTime;
-    processingTimer += deltaTime;
-}
-
-void IntersectionController::handleStateTransition() {
-    if (isPriorityMode && shouldSwitchToNormalMode()) {
-        isPriorityMode = false;
-        resetStateTimers();
-    }
-    else if (!isPriorityMode && shouldSwitchToPriorityMode()) {
-        isPriorityMode = true;
-        resetStateTimers();
-    }
-
-    // Force state change if stuck too long
-    if (stateTimer >= MAX_STATE_TIME) {
-        isPriorityMode = !isPriorityMode;
-        resetStateTimers();
-    }
 }
 
 void IntersectionController::updateLaneQueue() {
@@ -165,24 +140,39 @@ float IntersectionController::calculateProcessingTime() const {
         // In priority mode, only process priority lane
         Lane* priorityLane = getPriorityLane();
         if (priorityLane) {
-            return priorityLane->getQueueSize() * SimConstants::VEHICLE_PROCESS_TIME;
+            return priorityLane->getQueueSize() * BASE_VEHICLE_PROCESS_TIME;
         }
         return 0.0f;
     }
 
     // In normal mode, calculate average of normal lanes
-    // |V| = 1/n Σ|Li| where n is number of normal lanes
     float avgVehicles = calculateAverageWaitingVehicles();
-    return avgVehicles * SimConstants::VEHICLE_PROCESS_TIME;
+    return avgVehicles * BASE_VEHICLE_PROCESS_TIME;
 }
 
+void IntersectionController::handleStateTransition() {
+    if (isPriorityMode && shouldSwitchToNormalMode()) {
+        isPriorityMode = false;
+        resetStateTimers();
+    }
+    else if (!isPriorityMode && shouldSwitchToPriorityMode()) {
+        isPriorityMode = true;
+        resetStateTimers();
+    }
+
+    // Force state change if stuck too long
+    if (stateTimer >= MAX_STATE_TIME) {
+        isPriorityMode = !isPriorityMode;
+        resetStateTimers();
+    }
+}
 
 bool IntersectionController::shouldSwitchToNormalMode() const {
     if (!isPriorityMode) return false;
 
     Lane* priorityLane = getPriorityLane();
     return priorityLane &&
-           priorityLane->getQueueSize() <= SimConstants::NORMAL_THRESHOLD &&
+           priorityLane->getQueueSize() <= PRIORITY_RELEASE_THRESHOLD &&
            stateTimer >= MIN_STATE_TIME;
 }
 
@@ -191,7 +181,7 @@ bool IntersectionController::shouldSwitchToPriorityMode() const {
 
     Lane* priorityLane = getPriorityLane();
     return priorityLane &&
-           priorityLane->getQueueSize() > SimConstants::PRIORITY_THRESHOLD &&
+           priorityLane->getQueueSize() > PRIORITY_THRESHOLD &&
            stateTimer >= MIN_STATE_TIME;
 }
 
@@ -227,6 +217,12 @@ void IntersectionController::checkWaitTimes() {
             }
         }
     }
+}
+
+void IntersectionController::updateTimers(float deltaTime) {
+    stateTimer += deltaTime;
+    elapsedTime += deltaTime;
+    processingTimer += deltaTime;
 }
 
 std::vector<IntersectionController::LaneStatus> IntersectionController::getLaneStatuses() const {
