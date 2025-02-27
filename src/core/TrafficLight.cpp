@@ -1,17 +1,18 @@
-// TrafficLight.cpp
+// src/core/TrafficLight.cpp
 #include "core/TrafficLight.h"
 #include <cmath>
 
-TrafficLight::TrafficLight()
+TrafficLight::TrafficLight(LaneId lane)
     : state(LightState::RED)
     , nextState(LightState::RED)
     , transitionProgress(0.0f)
     , transitionDuration(1.0f)
     , stateTimer(0.0f)
     , isTransitioning(false)
-    , currentStateDuration(30.0f)  // Default duration
+    , currentStateDuration(15.0f)  // Default duration for normal mode
     , isPriorityMode(false)
     , isForced(false)
+    , controlledLane(lane)
 {
 }
 
@@ -69,16 +70,27 @@ void TrafficLight::setPriorityMode(bool enabled) {
 
 float TrafficLight::getStateDuration() const {
     if (isPriorityMode) {
-        return (state == LightState::GREEN) ? 40.0f : 20.0f;  // Longer green in priority
+        // In priority mode, A2 gets longer green, others longer red
+        if (controlledLane == LaneId::AL2_PRIORITY) {
+            return (state == LightState::GREEN) ? 30.0f : 5.0f;  // Priority lane gets more green time
+        } else {
+            return (state == LightState::GREEN) ? 5.0f : 30.0f;  // Others get less green time
+        }
     }
-    return (state == LightState::GREEN) ? 30.0f : 30.0f;  // Equal in normal mode
+
+    // In normal mode, more balanced durations
+    return 15.0f;
 }
 
 float TrafficLight::getNextStateDuration() const {
     if (isPriorityMode) {
-        return (nextState == LightState::GREEN) ? 40.0f : 20.0f;
+        if (controlledLane == LaneId::AL2_PRIORITY) {
+            return (nextState == LightState::GREEN) ? 30.0f : 5.0f;
+        } else {
+            return (nextState == LightState::GREEN) ? 5.0f : 30.0f;
+        }
     }
-    return 30.0f;
+    return 15.0f;
 }
 
 void TrafficLight::startTransition(LightState newState) {
@@ -149,4 +161,21 @@ void TrafficLight::render(SDL_Renderer* renderer, float x, float y) const {
     SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
     SDL_RenderRect(renderer, &redLight);
     SDL_RenderRect(renderer, &greenLight);
+
+    // Add priority indicator if this is the priority lane
+    if (controlledLane == LaneId::AL2_PRIORITY) {
+        SDL_FRect priorityIndicator = {
+            x + LIGHT_SIZE + 5.0f,
+            y,
+            10.0f,
+            10.0f
+        };
+
+        // Pulsing effect for priority mode
+        uint8_t alpha = isPriorityMode ?
+            static_cast<uint8_t>(128 + 127 * sinf(SDL_GetTicks() / 500.0f)) : 100;
+
+        SDL_SetRenderDrawColor(renderer, 255, 165, 0, alpha);
+        SDL_RenderFillRect(renderer, &priorityIndicator);
+    }
 }

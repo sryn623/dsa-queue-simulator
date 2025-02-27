@@ -1,22 +1,24 @@
-
-
+// src/visualization/Renderer.cpp
 #include "visualization/Renderer.h"
 #include <iostream>
 #include <cmath>
-#include <cmath>
+
+// Constructor
 Renderer::Renderer()
     : window(nullptr)
     , renderer(nullptr)
-    , debugMode(false) {
+    , debugMode(false)
+    , showGrid(false) {
 }
 
+// Destructor
 Renderer::~Renderer() {
     cleanup();
 }
 
 bool Renderer::initialize() {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        std::cerr << "SDL initialization failed: " << SDL_GetError() << std::endl;
+        std::cerr << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
         return false;
     }
 
@@ -39,6 +41,18 @@ bool Renderer::initialize() {
     }
 
     return true;
+}
+
+void Renderer::cleanup() {
+    if (renderer) {
+        SDL_DestroyRenderer(renderer);
+        renderer = nullptr;
+    }
+    if (window) {
+        SDL_DestroyWindow(window);
+        window = nullptr;
+    }
+    SDL_Quit();
 }
 
 void Renderer::render(const TrafficManager& trafficManager) {
@@ -71,12 +85,10 @@ void Renderer::render(const TrafficManager& trafficManager) {
         }
         renderLaneIdentifiers();
         renderVehicleCount(trafficManager);
-        debugOverlay.render(renderer, trafficManager);
     }
 
     SDL_RenderPresent(renderer);
 }
-
 
 void Renderer::renderBackground() {
     // Create a gradient sky effect
@@ -342,17 +354,18 @@ void Renderer::renderTrafficLights(const std::map<LaneId, TrafficLight>& lights)
     }
 }
 
+void Renderer::renderVehicles(const std::map<uint32_t, std::shared_ptr<Vehicle>>& vehicles) {
+    for (const auto& [id, vehicle] : vehicles) {
+        // Get vehicle data for rendering
+        float x = vehicle->getX();
+        float y = vehicle->getY();
+        Direction dir = vehicle->getDirection();
+        bool isPriority = vehicle->getCurrentLane() == LaneId::AL2_PRIORITY;
+        float angle = vehicle->getAngle();
+        bool isMoving = vehicle->isInProcess();
 
-void Renderer::renderVehicles(const std::map<uint32_t, VehicleState>& vehicles) {
-    for (const auto& [id, state] : vehicles) {
-        renderVehicle(
-            state.pos.x,          // Use pos.x instead of x
-            state.pos.y,          // Use pos.y instead of y
-            state.direction,
-            state.vehicle->getCurrentLane() == LaneId::AL2_PRIORITY,
-            state.turnAngle,
-            state.isMoving
-        );
+        // Render the vehicle
+        renderVehicle(x, y, dir, isPriority, angle, isMoving);
     }
 }
 
@@ -649,60 +662,6 @@ void Renderer::renderDashedLine(float x1, float y1, float x2, float y2) {
     }
 }
 
-void Renderer::cleanup() {
-    if (renderer) {
-        SDL_DestroyRenderer(renderer);
-        renderer = nullptr;
-    }
-    if (window) {
-        SDL_DestroyWindow(window);
-        window = nullptr;
-    }
-    SDL_Quit();
-}
-
-float Renderer::calculateTurningAngle(const VehicleState& state) const {
-    float dx = state.targetPos.x - state.pos.x;
-    float dy = state.targetPos.y - state.pos.y;
-    return std::atan2f(dy, dx);
-}
-
-SDL_Color Renderer::getLaneColor(LaneId laneId, bool isActive) const {
-    if (isActive) {
-        if (laneId == LaneId::AL2_PRIORITY) {
-            return {255, 165, 0, 255}; // Orange for active priority lane
-        }
-        return {0, 255, 0, 255}; // Green for active normal lanes
-    }
-
-    if (laneId == LaneId::AL2_PRIORITY) {
-        return {255, 165, 0, 128}; // Semi-transparent orange for inactive priority lane
-    }
-    return {255, 255, 255, 128}; // Semi-transparent white for inactive normal lanes
-}
-
-void Renderer::drawDebugGrid() {
-    SDL_SetRenderDrawColor(renderer, 128, 128, 128, 64);
-
-    // Draw vertical grid lines
-    for (float x = 0.0f; x < static_cast<float>(SimConstants::WINDOW_WIDTH); x += 50.0f) {
-        SDL_RenderLine(renderer,
-            static_cast<int>(x), 0,
-            static_cast<int>(x), SimConstants::WINDOW_HEIGHT
-        );
-    }
-
-    // Draw horizontal grid lines
-    for (float y = 0.0f; y < static_cast<float>(SimConstants::WINDOW_HEIGHT); y += 50.0f) {
-        SDL_RenderLine(renderer,
-            0, static_cast<int>(y),
-            SimConstants::WINDOW_WIDTH, static_cast<int>(y)
-        );
-    }
-}
-
-
-
 void Renderer::renderCrosswalks() {
     using namespace SimConstants;
 
@@ -731,26 +690,6 @@ void Renderer::renderCrosswalks() {
             SDL_RenderFillRect(renderer, &stripe);
         }
     }
-}
-
-SDL_FPoint Renderer::rotatePoint(float x, float y, float cx, float cy, float angle) {
-    // First, translate point back to origin by subtracting center coordinates
-    float translatedX = x - cx;
-    float translatedY = y - cy;
-
-    // Perform the rotation using the rotation matrix:
-    // | cos(θ) -sin(θ) |
-    // | sin(θ)  cos(θ) |
-    float rotatedX = translatedX * cosf(angle) - translatedY * sinf(angle);
-    float rotatedY = translatedX * sinf(angle) + translatedY * cosf(angle);
-
-    // Translate back to original position by adding center coordinates
-    SDL_FPoint result = {
-        rotatedX + cx,
-        rotatedY + cy
-    };
-
-    return result;
 }
 
 void Renderer::renderPriorityLaneIndicator() {
@@ -786,7 +725,9 @@ void Renderer::renderLaneIdentifiers() {
     struct LaneLabel {
         float x, y;
         LaneId id;
-    } labels[] = {
+    };
+
+    LaneLabel labels[] = {
         {CENTER_X - OFFSET, CENTER_Y - LANE_WIDTH, LaneId::AL1_INCOMING},
         {CENTER_X - OFFSET, CENTER_Y, LaneId::AL2_PRIORITY},
         {CENTER_X - OFFSET, CENTER_Y + LANE_WIDTH, LaneId::AL3_FREELANE},
@@ -851,10 +792,71 @@ void Renderer::renderVehicleCount(const TrafficManager& trafficManager) {
         countBox.x + BOX_WIDTH,
         countBox.y + BOX_HEIGHT / 2.0f
     );
-
-    // Vehicle counts are rendered here
-    // Note: Actual text rendering would require SDL_ttf setup
-    // For now, we just show the box layout
 }
 
-// End of Renderer.cpp
+void Renderer::drawDebugGrid() {
+    SDL_SetRenderDrawColor(renderer, 128, 128, 128, 64);
+
+    // Draw vertical grid lines
+    for (float x = 0.0f; x < static_cast<float>(SimConstants::WINDOW_WIDTH); x += 50.0f) {
+        SDL_RenderLine(renderer,
+            static_cast<int>(x), 0,
+            static_cast<int>(x), SimConstants::WINDOW_HEIGHT
+        );
+    }
+
+    // Draw horizontal grid lines
+    for (float y = 0.0f; y < static_cast<float>(SimConstants::WINDOW_HEIGHT); y += 50.0f) {
+        SDL_RenderLine(renderer,
+            0, static_cast<int>(y),
+            SimConstants::WINDOW_WIDTH, static_cast<int>(y)
+        );
+    }
+}
+
+SDL_FPoint Renderer::rotatePoint(float x, float y, float cx, float cy, float angle) {
+    // First, translate point back to origin by subtracting center coordinates
+    float translatedX = x - cx;
+    float translatedY = y - cy;
+
+    // Perform the rotation using the rotation matrix:
+    // | cos(θ) -sin(θ) |
+    // | sin(θ)  cos(θ) |
+    float rotatedX = translatedX * cosf(angle) - translatedY * sinf(angle);
+    float rotatedY = translatedX * sinf(angle) + translatedY * cosf(angle);
+
+    // Translate back to original position by adding center coordinates
+    SDL_FPoint result = {
+        rotatedX + cx,
+        rotatedY + cy
+    };
+
+    return result;
+}
+
+float Renderer::calculateTurningAngle(float targetX, float targetY, float currentX, float currentY) const {
+    float dx = targetX - currentX;
+    float dy = targetY - currentY;
+    return std::atan2f(dy, dx);
+}
+
+SDL_Color Renderer::getLaneColor(LaneId laneId, bool isActive) const {
+    if (isActive) {
+        if (laneId == LaneId::AL2_PRIORITY) {
+            return {255, 165, 0, 255}; // Orange for active priority lane
+        }
+        return {0, 255, 0, 255}; // Green for active normal lanes
+    }
+
+    if (laneId == LaneId::AL2_PRIORITY) {
+        return {255, 165, 0, 128}; // Semi-transparent orange for inactive priority lane
+    }
+    return {255, 255, 255, 128}; // Semi-transparent white for inactive normal lanes
+}
+
+void Renderer::updateWindowSize(int width, int height) {
+    // Resize the window if needed
+    if (window) {
+        SDL_SetWindowSize(window, width, height);
+    }
+}
