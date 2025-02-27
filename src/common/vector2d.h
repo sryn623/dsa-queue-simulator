@@ -16,3 +16,4 @@ struct Vector2D {
         return Vector2D(x * scalar, y * scalar);
     }
 };
+

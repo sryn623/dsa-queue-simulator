@@ -1,310 +1,439 @@
-// src/traffic_generator.cpp
-#include "traffic_generator.h"
-#include <thread>
-#include <fstream>
+// F// FILE: src/traffic_generator.cpp
 #include <iostream>
-#include <sstream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <random>
+#include <chrono>
+#include <thread>
+#include <filesystem>
 #include <ctime>
+#include <mutex>
+#include <iomanip>
+#include <atomic>
+#include <csignal>
+#include <map>
 
-Generator::Generator()
-    : nextVehicleId(1000)
-{
-    // Seed the random number generator
-    std::random_device rd;
-    rng = std::mt19937(rd());
+// Include Windows-specific headers if on Windows
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
-    // Initialize lane files system
-    initializeLaneFiles();
+// Namespaces
+namespace fs = std::filesystem;
 
-    // Setup configurations for each lane
-    setupLaneConfigs();
+// Constants for the generator - MODIFIED VALUES HERE
+const std::string DATA_DIR = "data/lanes";
+const int GENERATION_INTERVAL_MS = 2000;  // Increased from 800ms to 2000ms
+const int MAX_VEHICLES_PER_BATCH = 30;    // Reduced from 50 to 30
+const int MAX_TOTAL_VEHICLES = 60;        // New: Global limit
+const int PRIORITY_THRESHOLD_HIGH = 10;
+const int PRIORITY_THRESHOLD_LOW = 5;
+
+// Vehicle direction (for lane assignment)
+enum class Direction {
+    LEFT,
+    STRAIGHT,
+    RIGHT
+};
+
+// Global atomic flag to control continuous generation
+std::atomic<bool> keepRunning(true);
+
+// Signal handler for clean shutdown
+void signalHandler(int signum) {
+    keepRunning = false;
+    std::cout << "\nReceived termination signal. Stopping generator...\n";
 }
 
-void Generator::initializeLaneFiles() {
-    // Create data directory
-    dataDir = std::filesystem::current_path() / "data" / "lanes";
-    if (!std::filesystem::exists(dataDir)) {
-        std::filesystem::create_directories(dataDir);
-    }
-
-    // Initialize the individual lane files
-    laneFiles[Constants::LaneId::AL1_INCOMING] = dataDir / "lane_a1.txt";
-    laneFiles[Constants::LaneId::AL2_PRIORITY] = dataDir / "lane_a2.txt";
-    laneFiles[Constants::LaneId::AL3_FREELANE] = dataDir / "lane_a3.txt";
-    laneFiles[Constants::LaneId::BL1_INCOMING] = dataDir / "lane_b1.txt";
-    laneFiles[Constants::LaneId::BL2_NORMAL] = dataDir / "lane_b2.txt";
-    laneFiles[Constants::LaneId::BL3_FREELANE] = dataDir / "lane_b3.txt";
-    laneFiles[Constants::LaneId::CL1_INCOMING] = dataDir / "lane_c1.txt";
-    laneFiles[Constants::LaneId::CL2_NORMAL] = dataDir / "lane_c2.txt";
-    laneFiles[Constants::LaneId::CL3_FREELANE] = dataDir / "lane_c3.txt";
-    laneFiles[Constants::LaneId::DL1_INCOMING] = dataDir / "lane_d1.txt";
-    laneFiles[Constants::LaneId::DL2_NORMAL] = dataDir / "lane_d2.txt";
-    laneFiles[Constants::LaneId::DL3_FREELANE] = dataDir / "lane_d3.txt";
-
-    // Create/clear all files
-    clearAllFiles();
-
-    // Also create a common vehicle data file for compatibility with C implementation
-    std::ofstream combinedFile("vehicles.data", std::ios::trunc);
-    if (!combinedFile) {
-        std::cerr << "Failed to create vehicles.data file" << std::endl;
-    }
+// Set up colored console output
+void setupConsole() {
+#ifdef _WIN32
+    // Enable ANSI escape codes on Windows
+    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dwMode = 0;
+    GetConsoleMode(hOut, &dwMode);
+    SetConsoleMode(hOut, dwMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#endif
 }
 
-void Generator::setupLaneConfigs() {
-    // Set up spawn rates and lane configurations
+// Simple console log with color
+void console_log(const std::string& message, const std::string& color = "\033[1;36m") {
+    std::time_t now = std::time(nullptr);
+    std::tm timeinfo;
 
-    // Road A (West) configs
-    laneConfigs[Constants::LaneId::AL1_INCOMING] = {0.6, 10, true, false, true};   // A1: Right/Straight
-    laneConfigs[Constants::LaneId::AL2_PRIORITY] = {0.7, 15, true, false, false};  // A2: Straight only (priority)
-    laneConfigs[Constants::LaneId::AL3_FREELANE] = {0.5, 8, false, true, false};   // A3: Left only
+#ifdef _WIN32
+    localtime_s(&timeinfo, &now);
+#else
+    localtime_r(&now, &timeinfo);
+#endif
 
-    // Road B (North) configs
-    laneConfigs[Constants::LaneId::BL1_INCOMING] = {0.55, 10, true, false, true};  // B1: Right/Straight
-    laneConfigs[Constants::LaneId::BL2_NORMAL] = {0.6, 12, true, false, false};    // B2: Straight only
-    laneConfigs[Constants::LaneId::BL3_FREELANE] = {0.5, 8, false, true, false};   // B3: Left only
+    char timestamp[64];
+    std::strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", &timeinfo);
 
-    // Road C (East) configs
-    laneConfigs[Constants::LaneId::CL1_INCOMING] = {0.6, 10, true, false, true};   // C1: Right/Straight
-    laneConfigs[Constants::LaneId::CL2_NORMAL] = {0.65, 12, true, false, false};   // C2: Straight only
-    laneConfigs[Constants::LaneId::CL3_FREELANE] = {0.5, 8, false, true, false};   // C3: Left only
-
-    // Road D (South) configs
-    laneConfigs[Constants::LaneId::DL1_INCOMING] = {0.6, 10, true, false, true};   // D1: Right/Straight
-    laneConfigs[Constants::LaneId::DL2_NORMAL] = {0.6, 12, true, false, false};    // D2: Straight only
-    laneConfigs[Constants::LaneId::DL3_FREELANE] = {0.5, 8, false, true, false};   // D3: Left only
+    std::cout << color << "[" << timestamp << "]\033[0m " << message << std::endl;
 }
 
-void Generator::generateTraffic() {
-    // Try to generate traffic for each lane
-    for (const auto& [laneId, config] : laneConfigs) {
-        // Get current vehicle count
-        size_t currentCount = countVehiclesInFile(laneFiles[laneId]);
-
-        // Check if we should generate a new vehicle
-        if (shouldGenerateVehicle(config, currentCount)) {
-            // Determine direction based on lane rules
-            Constants::Direction dir = getRandomDirection(config);
-
-            // Create new vehicle ID and write to file
-            uint32_t vehicleId = nextVehicleId++;
-            writeVehicleToFile(laneFiles[laneId], vehicleId, dir);
-
-            // Also write to combined file for C code compatibility
-            writeVehicleToCombinedFile(laneId, vehicleId);
-
-            // Log the generation
-            logGeneration(laneId, vehicleId, dir, currentCount + 1, config.maxVehicles);
-        }
+// Ensure data directories exist
+void ensure_directories() {
+    if (!fs::exists(DATA_DIR)) {
+        fs::create_directories(DATA_DIR);
+        console_log("Created directory: " + DATA_DIR);
     }
 }
 
-void Generator::writeVehicleToCombinedFile(Constants::LaneId lane, uint32_t id) {
+// Write a vehicle to lane file with updated turn directions
+void write_vehicle(const std::string& id, char lane, int laneNumber, Direction dir = Direction::LEFT) {
+    static std::mutex fileMutex;
     std::lock_guard<std::mutex> lock(fileMutex);
 
-    // Determine which road this lane belongs to (A, B, C, D)
-    char roadId;
-    int laneNum;
-
-    switch (static_cast<int>(lane) / 3) {
-        case 0: roadId = 'A'; break;
-        case 1: roadId = 'B'; break;
-        case 2: roadId = 'C'; break;
-        case 3: roadId = 'D'; break;
-        default: roadId = 'X'; break;
+    // Skip invalid lane numbers and Lane 1 (shouldn't spawn here)
+    if (laneNumber < 1 || laneNumber > 3 || laneNumber == 1) {
+        return;
     }
 
-    // Determine lane number within the road (1, 2, 3)
-    laneNum = static_cast<int>(lane) % 3 + 1;
+    std::string filepath = DATA_DIR + "/lane" + lane + ".txt";
+    std::ofstream file(filepath, std::ios::app);
 
-    try {
-        std::ofstream file("vehicles.data", std::ios::app);
-        if (file) {
-            // Format: "VEH1234_L2:A" for vehicle 1234 in lane 2 of road A
-            file << "VEH" << id << "_L" << laneNum << ":" << roadId << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Error writing to combined file: " << e.what() << std::endl;
-    }
-}
+    if (file.is_open()) {
+        // Format: vehicleId_L{laneNumber}:lane
+        file << id << "_L" << laneNumber;
 
-Constants::Direction Generator::getRandomDirection(const LaneConfig& config) {
-    std::vector<Constants::Direction> possibleDirections;
-
-    // Add possible directions based on configuration
-    if (config.canGoStraight) possibleDirections.push_back(Constants::Direction::STRAIGHT);
-    if (config.canGoLeft) possibleDirections.push_back(Constants::Direction::LEFT);
-    if (config.canGoRight) possibleDirections.push_back(Constants::Direction::RIGHT);
-
-    // If no directions allowed (shouldn't happen), default to straight
-    if (possibleDirections.empty()) {
-        return Constants::Direction::STRAIGHT;
-    }
-
-    // Select random direction from allowed set
-    std::uniform_int_distribution<> dirDist(0, possibleDirections.size() - 1);
-    return possibleDirections[dirDist(rng)];
-}
-
-size_t Generator::countVehiclesInFile(const std::filesystem::path& filepath) const {
-    try {
-        if (!std::filesystem::exists(filepath)) return 0;
-
-        std::ifstream file(filepath);
-        if (!file) return 0;
-
-        size_t count = 0;
-        std::string line;
-        while (std::getline(file, line)) {
-            if (!line.empty()) count++;
-        }
-
-        return count;
-    } catch (const std::exception& e) {
-        std::cerr << "Error counting vehicles: " << e.what() << std::endl;
-        return 0;
-    }
-}
-
-void Generator::writeVehicleToFile(const std::filesystem::path& filepath, uint32_t id,
-                               Constants::Direction dir) {
-    std::lock_guard<std::mutex> lock(fileMutex);
-
-    try {
-        std::ofstream file(filepath, std::ios::app);
-        if (file) {
-            char dirChar;
-            switch (dir) {
-                case Constants::Direction::STRAIGHT: dirChar = 'S'; break;
-                case Constants::Direction::LEFT: dirChar = 'L'; break;
-                case Constants::Direction::RIGHT: dirChar = 'R'; break;
-                default: dirChar = 'S'; break;
+        // Add direction info based on lane and specific rules
+        if (laneNumber == 3) {
+            // Lane 3 always turns left
+            file << "_LEFT";
+        } else if (laneNumber == 2) {
+            // Lane 2 can go straight or left (changed from right to left)
+            if (dir == Direction::STRAIGHT) {
+                file << "_STRAIGHT";
+            } else {
+                file << "_LEFT"; // Changed from _RIGHT to _LEFT
             }
-
-            // Format: "ID,DIRECTION;TIMESTAMP"
-            file << id << "," << dirChar << ";" << std::time(nullptr) << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Error writing to file: " << e.what() << std::endl;
-    }
-}
-
-bool Generator::shouldGenerateVehicle(const LaneConfig& config, size_t currentCount) {
-    // Check if lane is at capacity
-    if (currentCount >= config.maxVehicles) {
-        return false;
-    }
-
-    // Probability-based generation
-    std::uniform_real_distribution<> dist(0.0, 1.0);
-    return dist(rng) < config.spawnRate / (currentCount + 1); // Decreases as queue grows
-}
-
-void Generator::clearAllFiles() {
-    std::lock_guard<std::mutex> lock(fileMutex);
-
-    for (const auto& [_, filepath] : laneFiles) {
-        try {
-            std::ofstream file(filepath, std::ios::trunc);
-        } catch (const std::exception& e) {
-            std::cerr << "Error clearing file " << filepath << ": " << e.what() << std::endl;
-        }
-    }
-
-    // Clear combined file too
-    try {
-        std::ofstream file("vehicles.data", std::ios::trunc);
-    } catch (const std::exception& e) {
-        std::cerr << "Error clearing vehicles.data: " << e.what() << std::endl;
-    }
-}
-
-void Generator::logGeneration(Constants::LaneId lane, uint32_t vehicleId, Constants::Direction dir,
-                          size_t currentCount, int maxCount) {
-    std::cout << "Generated vehicle " << vehicleId << " in lane "
-              << static_cast<int>(lane) << " (";
-
-    // Print road/lane identifier
-    char roadId;
-    int laneNum = static_cast<int>(lane) % 3 + 1;
-
-    switch (static_cast<int>(lane) / 3) {
-        case 0: roadId = 'A'; break;
-        case 1: roadId = 'B'; break;
-        case 2: roadId = 'C'; break;
-        case 3: roadId = 'D'; break;
-        default: roadId = 'X'; break;
-    }
-
-    std::cout << roadId << laneNum << ") with direction ";
-
-    switch (dir) {
-        case Constants::Direction::STRAIGHT: std::cout << "STRAIGHT"; break;
-        case Constants::Direction::LEFT: std::cout << "LEFT"; break;
-        case Constants::Direction::RIGHT: std::cout << "RIGHT"; break;
-    }
-
-    std::cout << " [" << currentCount << "/" << maxCount << "]" << std::endl;
-}
-
-void Generator::displayStatus() const {
-    // Clear console
-    std::cout << "\033[2J\033[1;1H";
-
-    std::cout << "=== Traffic Generator Status ===" << std::endl;
-    std::cout << "Next Vehicle ID: " << nextVehicleId << std::endl;
-    std::cout << std::endl;
-
-    // Display lane statistics
-    std::cout << "Lane Statistics:" << std::endl;
-    std::cout << "----------------" << std::endl;
-
-    for (const auto& [laneId, filepath] : laneFiles) {
-        size_t count = countVehiclesInFile(filepath);
-        const auto& config = laneConfigs.at(laneId);
-
-        // Get lane name
-        char roadId;
-        int laneNum = static_cast<int>(laneId) % 3 + 1;
-
-        switch (static_cast<int>(laneId) / 3) {
-            case 0: roadId = 'A'; break;
-            case 1: roadId = 'B'; break;
-            case 2: roadId = 'C'; break;
-            case 3: roadId = 'D'; break;
-            default: roadId = 'X'; break;
         }
 
-        std::cout << "Lane " << roadId << laneNum << ": ";
+        file << ":" << lane << std::endl;
+        file.close();
 
-        // Special indicators
-        if (laneNum == 2 && roadId == 'A') std::cout << "[PRIORITY] ";
-        if (laneNum == 3) std::cout << "[FREE] ";
+        // Format log message with colors based on lane type
+        std::string color = "\033[1;32m"; // Default green
+        std::string dirStr = "";
 
-        // Display count and capacity
-        std::cout << count << "/" << config.maxVehicles;
+        if (laneNumber == 3) {
+            color = "\033[1;32m"; // Green for free lane
+            dirStr = " (LEFT turn)";
+        } else if (laneNumber == 2 && lane == 'A') {
+            color = "\033[1;33m"; // Yellow for priority lane
+            dirStr = (dir == Direction::STRAIGHT) ? " (STRAIGHT)" : " (LEFT turn)";
+        } else if (laneNumber == 2) {
+            color = "\033[1;37m"; // White for normal lane 2
+            dirStr = (dir == Direction::STRAIGHT) ? " (STRAIGHT)" : " (LEFT turn)";
+        }
 
-        // Directions allowed
-        std::cout << " Directions: ";
-        if (config.canGoStraight) std::cout << "S";
-        if (config.canGoLeft) std::cout << "L";
-        if (config.canGoRight) std::cout << "R";
-
-        std::cout << std::endl;
+        console_log("Added " + id + " to lane " + lane + std::to_string(laneNumber) + dirStr, color);
+    } else {
+        console_log("ERROR: Could not open file " + filepath, "\033[1;31m");
     }
+}
+
+// Generate a random lane (A, B, C, D) - North, East, South, West
+char random_lane() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_int_distribution<int> dist(0, 3);
+    return 'A' + dist(gen);
+}
+
+// Generate a lane number - only Lane 2 or 3 (never Lane 1)
+int random_lane_number() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+
+    // Only generate Lane 2 (60%) or Lane 3 (40%) - never Lane 1
+    std::vector<double> weights = {0.0, 0.6, 0.4}; // Weights for lanes 1, 2, 3
+    std::discrete_distribution<int> dist(weights.begin(), weights.end());
+
+    return dist(gen) + 1; // Returns 2 or 3
+}
+
+// Generate direction (LEFT or STRAIGHT) based on lane rules
+Direction random_direction(int laneNumber) {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+
+    if (laneNumber == 3) {
+        // Lane 3 always goes left
+        return Direction::LEFT;
+    } else if (laneNumber == 2) {
+        // Lane 2 can go straight (60%) or left (40%) - changed from right to left
+        std::vector<double> weights = {0.4, 0.6, 0.0}; // [LEFT, STRAIGHT, RIGHT]
+        std::discrete_distribution<int> dist(weights.begin(), weights.end());
+        return static_cast<Direction>(dist(gen));
+    } else {
+        // Lane 1 is incoming lane (shouldn't generate vehicles)
+        return Direction::STRAIGHT;
+    }
+}
+
+// Clear existing files
+void clear_files() {
+    for (char lane = 'A'; lane <= 'D'; lane++) {
+        std::string filepath = DATA_DIR + "/lane" + lane + ".txt";
+        std::ofstream file(filepath, std::ios::trunc);
+        file.close();
+        console_log("Cleared file: " + filepath);
+    }
+}
+
+// Display status of current generation
+void display_status(int current, int total, int a2_count) {
+    const int barWidth = 40;
+    float progress = static_cast<float>(current) / total;
+    int pos = static_cast<int>(barWidth * progress);
+
+    std::cout << "\r\033[1;33m[";
+    for (int i = 0; i < barWidth; ++i) {
+        if (i < pos) std::cout << "=";
+        else if (i == pos) std::cout << ">";
+        else std::cout << " ";
+    }
+
+    std::cout << "] " << int(progress * 100.0) << "% "
+              << "Vehicles: " << current << "/" << total
+              << " (A2: " << a2_count << ")\033[0m" << std::flush;
+}
+
+// Count current vehicles in each lane from files
+std::map<std::string, int> count_vehicles_in_lanes() {
+    std::map<std::string, int> counts;
+
+    for (char lane = 'A'; lane <= 'D'; lane++) {
+        std::string filepath = DATA_DIR + "/lane" + lane + ".txt";
+        std::ifstream file(filepath);
+
+        if (file.is_open()) {
+            std::string line;
+            while (std::getline(file, line)) {
+                // Extract lane number
+                size_t lanePos = line.find("_L");
+                if (lanePos != std::string::npos && lanePos + 2 < line.length()) {
+                    char laneNumChar = line[lanePos + 2];
+                    if (laneNumChar >= '1' && laneNumChar <= '3') {
+                        std::string laneKey = std::string(1, lane) + laneNumChar;
+                        counts[laneKey]++;
+                    }
+                }
+            }
+            file.close();
+        }
+    }
+
+    return counts;
+}
+
+// Display current lane statistics
+void display_lane_stats() {
+    auto counts = count_vehicles_in_lanes();
+
+    std::cout << "\033[1;34m";
+    std::cout << "┌────────────────────────────────────┐\n";
+    std::cout << "│          Lane Statistics           │\n";
+    std::cout << "├────────┬───────┬───────┬───────────┤\n";
+    std::cout << "│  Road  │  L1   │  L2   │  L3(Free) │\n";
+    std::cout << "├────────┼───────┼───────┼───────────┤\n";
+
+    int total = 0;
+    for (char lane = 'A'; lane <= 'D'; lane++) {
+        std::string laneLabel;
+        switch (lane) {
+            case 'A': laneLabel = "A(North)"; break;
+            case 'B': laneLabel = "B(East) "; break;
+            case 'C': laneLabel = "C(South)"; break;
+            case 'D': laneLabel = "D(West) "; break;
+        }
+
+        std::cout << "│ " << laneLabel << " │";
+
+        for (int i = 1; i <= 3; i++) {
+            std::string laneKey = std::string(1, lane) + std::to_string(i);
+            int count = counts[laneKey];
+            total += count;
+
+            // Highlight A2 (priority lane) if over threshold
+            if (lane == 'A' && i == 2 && count > PRIORITY_THRESHOLD_HIGH) {
+                std::cout << " \033[1;33m" << std::setw(5) << count << "\033[1;34m │";
+            } else {
+                std::cout << " " << std::setw(5) << count << " │";
+            }
+        }
+        std::cout << "\n";
+    }
+
+    std::cout << "├────────┴───────┴───────┴───────────┤\n";
+    std::cout << "│ Total vehicles: " << std::setw(20) << total << " │\n";
+    std::cout << "└────────────────────────────────────┘\033[0m\n";
 }
 
 int main() {
-    Generator generator;
+    try {
+        // Set up signal handler for clean termination
+        std::signal(SIGINT, signalHandler);
 
-    std::cout << "Traffic Generator Started" << std::endl;
-    std::cout << "Press Ctrl+C to exit" << std::endl;
+        // Set up console for colored output
+        setupConsole();
 
-    while (true) {
-        generator.generateTraffic();
-        generator.displayStatus();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        console_log("✅ Traffic generator starting", "\033[1;35m");
+
+        // Create directories and clear files
+        ensure_directories();
+        clear_files();
+
+        // Random generators
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_real_distribution<> delay_dist(0.7, 1.3); // For randomized intervals
+
+        // Global tracking variables
+        int total_vehicles = 0;
+        int a2_count = 0;
+        int current_batch = 0;
+
+        // First generate A2 priority lane vehicles
+        console_log("🚦 Generating priority lane vehicles (A2)", "\033[1;33m");
+        for (int i = 0; i < 12 && keepRunning; i++) {
+            std::string id = "V" + std::to_string(total_vehicles + 1);
+
+            // Alternate between straight and left turns for lane A2
+            Direction dir = (i % 2 == 0) ? Direction::STRAIGHT : Direction::LEFT;
+            write_vehicle(id, 'A', 2, dir); // Lane A2 with direction
+
+            total_vehicles++;
+            a2_count++;
+            current_batch++;
+
+            // Display progress
+            display_status(current_batch, MAX_VEHICLES_PER_BATCH, a2_count);
+
+            // Wait between vehicles with slight randomization
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(
+                    static_cast<int>(GENERATION_INTERVAL_MS * delay_dist(gen))
+                )
+            );
+        }
+
+        std::cout << std::endl;
+        console_log("🚗 Generating continuous traffic flow", "\033[1;34m");
+
+        // Display starting lane stats
+        display_lane_stats();
+
+        // Stats display timer
+        auto lastStatsTime = std::chrono::steady_clock::now();
+        bool in_priority_mode = false;
+
+        // Continuous generation until terminated
+        while (keepRunning) {
+            // NEW: Check total vehicle count before generating more
+            auto counts = count_vehicles_in_lanes();
+            int totalVehiclesInSystem = 0;
+
+            for (char lane = 'A'; lane <= 'D'; lane++) {
+                for (int i = 1; i <= 3; i++) {
+                    std::string laneKey = std::string(1, lane) + std::to_string(i);
+                    totalVehiclesInSystem += counts[laneKey];
+                }
+            }
+
+            // Only generate new vehicles if below the maximum limit
+            if (totalVehiclesInSystem < MAX_TOTAL_VEHICLES) {
+                char lane = random_lane();
+                int lane_num = random_lane_number(); // Will only return 2 or 3
+                Direction dir = random_direction(lane_num);
+
+                // For testing priority condition, occasionally bias toward lane A2
+                if (gen() % 10 == 0) {
+                    lane = 'A';
+                    lane_num = 2;
+                    dir = (gen() % 2 == 0) ? Direction::STRAIGHT : Direction::LEFT;
+                }
+
+                // Also ensure good distribution for lane 3 (free lane)
+                if (gen() % 15 == 0) {
+                    lane = random_lane();
+                    lane_num = 3; // Force lane 3 (free lane)
+                    dir = Direction::LEFT; // Lane 3 always turns left
+                }
+
+                std::string id = "V" + std::to_string(total_vehicles + 1);
+
+                // Write vehicle to file with appropriate direction
+                write_vehicle(id, lane, lane_num, dir);
+
+                // Update counters
+                total_vehicles++;
+                current_batch++;
+                if (lane == 'A' && lane_num == 2) {
+                    a2_count++;
+                }
+
+                // Display progress
+                display_status(current_batch, MAX_VEHICLES_PER_BATCH, a2_count);
+            } else {
+                // Skip generation this cycle and wait for vehicles to clear
+                console_log("Vehicle limit reached (" + std::to_string(totalVehiclesInSystem) +
+                          "/" + std::to_string(MAX_TOTAL_VEHICLES) + ") - waiting", "\033[1;33m");
+
+                // Wait longer between generation attempts when system is full
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            }
+
+            // Periodically display lane stats (every 5 seconds)
+            auto currentTime = std::chrono::steady_clock::now();
+            if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastStatsTime).count() >= 5) {
+                std::cout << std::endl;
+                display_lane_stats();
+                lastStatsTime = currentTime;
+            }
+
+            // Reset batch counter when it reaches max
+            if (current_batch >= MAX_VEHICLES_PER_BATCH) {
+                current_batch = 0;
+                std::cout << std::endl;
+                console_log("♻️ New batch starting", "\033[1;34m");
+                display_lane_stats();
+            }
+
+            // Check priority lane count and log state changes
+            auto currentCounts = count_vehicles_in_lanes();
+            int a2_count_current = currentCounts["A2"];
+
+            if (!in_priority_mode && a2_count_current > PRIORITY_THRESHOLD_HIGH) {
+                in_priority_mode = true;
+                console_log("⚠️ Priority mode activated (A2: " + std::to_string(a2_count_current) +
+                          " vehicles)", "\033[1;31m");
+            } else if (in_priority_mode && a2_count_current < PRIORITY_THRESHOLD_LOW) {
+                in_priority_mode = false;
+                console_log("✅ Priority mode deactivated (A2: " + std::to_string(a2_count_current) +
+                          " vehicles)", "\033[1;32m");
+            }
+
+            // Wait between vehicles with slight randomization
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(
+                    static_cast<int>(GENERATION_INTERVAL_MS * delay_dist(gen))
+                )
+            );
+        }
+
+        std::cout << std::endl;
+        console_log("✅ Traffic generator completed. Generated " +
+                   std::to_string(total_vehicles) + " vehicles.", "\033[1;35m");
+
+        return 0;
     }
-
-    return 0;
+    catch (const std::exception& e) {
+        std::cerr << "\033[1;31mError: " << e.what() << "\033[0m" << std::endl;
+        return 1;
+    }
 }

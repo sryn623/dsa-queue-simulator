@@ -1,561 +1,485 @@
-
-// src/managers/TrafficManager.cpp
+// FILE: src/managers/TrafficManager.cpp
 #include "managers/TrafficManager.h"
+#include "utils/DebugLogger.h"
+#include <sstream>
 #include <algorithm>
-#include <iostream>
+#include <wchar.h>
+#include "core/Constants.h"
 
 TrafficManager::TrafficManager()
-    : inPriorityMode(false)
-    , stateTimer(0.0f)
-    , lastUpdateTime(0.0f)
-    , processingTimer(0.0f)
-    , totalVehiclesProcessed(0)
-    , averageWaitTime(0.0f)
-{
-    // Initialize lanes
-    lanes.push_back(std::make_unique<Lane>(LaneId::AL1_INCOMING, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::AL2_PRIORITY, true));  // Priority lane
-    lanes.push_back(std::make_unique<Lane>(LaneId::AL3_FREELANE, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::BL1_INCOMING, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::BL2_NORMAL, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::BL3_FREELANE, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::CL1_INCOMING, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::CL2_NORMAL, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::CL3_FREELANE, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::DL1_INCOMING, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::DL2_NORMAL, false));
-    lanes.push_back(std::make_unique<Lane>(LaneId::DL3_FREELANE, false));
+    : trafficLight(nullptr),
+      fileHandler(nullptr),
+      lastFileCheckTime(0),
+      lastPriorityUpdateTime(0),
+      running(false) {
 
-    // Initialize traffic lights with their controlled lanes
-    trafficLights[LaneId::AL2_PRIORITY] = TrafficLight(LaneId::AL2_PRIORITY);
-    trafficLights[LaneId::BL2_NORMAL] = TrafficLight(LaneId::BL2_NORMAL);
-    trafficLights[LaneId::CL2_NORMAL] = TrafficLight(LaneId::CL2_NORMAL);
-    trafficLights[LaneId::DL2_NORMAL] = TrafficLight(LaneId::DL2_NORMAL);
-
-    // Initialize lane priority queue
-    updateLaneQueue();
-    synchronizeTrafficLights();
+    DebugLogger::log("TrafficManager created");
 }
 
-// Fix for the update method to make it safer
-void TrafficManager::update(float deltaTime) {
-    // Update timers first to avoid calling methods that might lock mutexes while holding a lock
-    updateTimers(deltaTime);
+TrafficManager::~TrafficManager() {
+    // Clean up resources
+    for (auto* lane : lanes) {
+        delete lane;
+    }
+    lanes.clear();
 
-    // These operations can be done independently with no risk of deadlock
-    processNewVehicles();
-    handleStateTransition(deltaTime);
-    updateVehiclePositions(deltaTime);
-    updateTrafficLights(deltaTime);
-
-    // Calculate stats without modifying data
-    updateStatistics(deltaTime);
-
-    // Process vehicles based on mode
-    if (processingTimer >= SimConstants::VEHICLE_PROCESS_TIME) {
-        if (inPriorityMode) {
-            processPriorityLane();
-        } else {
-            processNormalLanes(calculateVehiclesToProcess());
-        }
-        processFreeLanes();
-        processingTimer = 0.0f;
-
-        // Update lane queue after processing
-        updateLaneQueue();
+    if (trafficLight) {
+        delete trafficLight;
+        trafficLight = nullptr;
     }
 
-    // Check wait times and clean up
-    checkWaitTimes();
-    cleanupFinishedVehicles();
-
-    // Update individual lanes
-    for (auto& lane : lanes) {
-        lane->update(deltaTime);
+    if (fileHandler) {
+        delete fileHandler;
+        fileHandler = nullptr;
     }
+
+    DebugLogger::log("TrafficManager destroyed");
 }
 
-// Add this implementation to the updateLaneQueue method
-void TrafficManager::updateLaneQueue() {
-    // Create a temporary new queue instead of modifying the existing one in-place
-    PriorityQueue<LaneId> newQueue;
+bool TrafficManager::initialize() {
+    // Create file handler with consistent path
+    fileHandler = new FileHandler(Constants::DATA_PATH);
+    if (!fileHandler->initializeFiles()) {
+        DebugLogger::log("Failed to initialize lane files", DebugLogger::LogLevel::ERROR);
+        return false;
+    }
 
-    // Add lanes with calculated priorities
-    for (const auto& lane : lanes) {
-        if (!isFreeLane(lane->getId())) {
-            int priority = 1; // Default priority
+    // Create lanes for each road and lane number
+    for (char road : {'A', 'B', 'C', 'D'}) {
+        for (int laneNum = 1; laneNum <= 3; laneNum++) {
+            Lane* lane = new Lane(road, laneNum);
+            lanes.push_back(lane);
 
-            if (lane->isPriorityLane() && lane->getQueueSize() > SimConstants::PRIORITY_THRESHOLD) {
-                priority = 3; // Highest priority
-            }
-            else if (lane->getQueueSize() > 8) {
-                priority = 2; // Medium priority
-            }
-
-            newQueue.enqueuePriority(lane->getId(), priority);
+            // Add to priority queue with initial priority
+            lanePriorityQueue.enqueue(lane, lane->getPriority());
         }
     }
 
-    // Move the new queue to replace the existing one (no mutex deadlock issue)
-    laneQueue = std::move(newQueue);
+    // Create traffic light
+    trafficLight = new TrafficLight();
+
+    std::ostringstream oss;
+    oss << "TrafficManager initialized with " << lanes.size() << " lanes";
+    DebugLogger::log(oss.str());
+
+    return true;
 }
 
-void TrafficManager::addVehicleToLane(LaneId laneId, std::shared_ptr<Vehicle> vehicle) {
-    auto it = std::find_if(lanes.begin(), lanes.end(),
-        [laneId](const auto& lane) { return lane->getId() == laneId; });
-
-    if (it != lanes.end()) {
-        (*it)->addVehicle(vehicle);
-        activeVehicles[vehicle->getId()] = vehicle;
-
-        // Position vehicle based on lane
-        setupVehicleTurn(vehicle);
-    }
+void TrafficManager::start() {
+    running = true;
+    DebugLogger::log("TrafficManager started");
 }
 
-void TrafficManager::setupVehicleTurn(std::shared_ptr<Vehicle> vehicle) {
-    using namespace SimConstants;
+void TrafficManager::stop() {
+    running = false;
+    DebugLogger::log("TrafficManager stopped");
+}
 
-    // Initialize vehicle position based on lane
-    LaneId laneId = vehicle->getCurrentLane();
-    int roadNum = static_cast<int>(laneId) / 3; // 0-3 for W,N,E,S
-    int lanePosition = static_cast<int>(laneId) % 3; // 0-2 for lane position
+void TrafficManager::update(uint32_t delta) {
+    if (!running) return;
 
-    // Calculate lane offset from center
-    float laneOffset = (lanePosition - 1) * LANE_WIDTH;
+    uint32_t currentTime = SDL_GetTicks();
 
-    // Set initial position based on approach direction
-    float initialX = CENTER_X;
-    float initialY = CENTER_Y;
-    float initialAngle = 0.0f;
-
-    switch (roadNum) {
-        case 0: // West approach (A lanes)
-            initialX = -VEHICLE_WIDTH;
-            initialY = CENTER_Y + laneOffset;
-            initialAngle = 0.0f; // Facing east
-            break;
-
-        case 1: // North approach (B lanes)
-            initialX = CENTER_X + laneOffset;
-            initialY = -VEHICLE_HEIGHT;
-            initialAngle = M_PI/2.0f; // Facing south
-            break;
-
-        case 2: // East approach (C lanes)
-            initialX = WINDOW_WIDTH + VEHICLE_WIDTH;
-            initialY = CENTER_Y - laneOffset; // Note negative offset
-            initialAngle = M_PI; // Facing west
-            break;
-
-        case 3: // South approach (D lanes)
-            initialX = CENTER_X - laneOffset; // Note negative offset
-            initialY = WINDOW_HEIGHT + VEHICLE_HEIGHT;
-            initialAngle = -M_PI/2.0f; // Facing north
-            break;
+    // Check for new vehicles more frequently (every 200ms)
+    if (currentTime - lastFileCheckTime >= 200) {
+        readVehicles();
+        lastFileCheckTime = currentTime;
     }
 
-    // Set vehicle position and targets
-    vehicle->setTargetPosition(initialX, initialY, initialAngle);
+    // CRITICAL: Update lane priorities FIRST - this must happen before traffic light updates
+    updatePriorities();
 
-    // Calculate turn parameters if needed
-    if (vehicle->getDirection() != Direction::STRAIGHT) {
-        vehicle->calculateTurnParameters(ROAD_WIDTH, LANE_WIDTH, CENTER_X, CENTER_Y);
+    // CRITICAL: Process vehicles based on traffic light state and lane type
+    processVehicles(delta);
+
+    // Check for vehicles leaving the simulation
+    checkVehicleBoundaries();
+
+    // Update traffic light - AFTER priorities have been updated
+    if (trafficLight) {
+        trafficLight->update(lanes);
     }
-}
 
-size_t TrafficManager::getLaneSize(LaneId laneId) const {
-    auto it = std::find_if(lanes.begin(), lanes.end(),
-        [laneId](const auto& lane) { return lane->getId() == laneId; });
-    return it != lanes.end() ? (*it)->getQueueSize() : 0;
-}
+    // Debug log current state
+    static uint32_t lastDebugTime = 0;
+    if (currentTime - lastDebugTime > 2000) {  // Every 2 seconds
+        Lane* priorityLane = findLane('A', 2);
+        if (priorityLane) {
+            DebugLogger::log("A2 (Priority lane) has " + std::to_string(priorityLane->getVehicleCount()) +
+                          " vehicles (Priority: " + std::to_string(priorityLane->getPriority()) + ")",
+                          DebugLogger::LogLevel::INFO);
+        }
 
-void TrafficManager::updateVehiclePositions(float deltaTime) {
-    // Update position for each active vehicle
-    for (auto& [_, vehicle] : activeVehicles) {
-        if (vehicle->isInProcess()) {
-            if (vehicle->isTurning()) {
-                vehicle->updateTurn(deltaTime);
-            } else {
-                vehicle->updateMovement(deltaTime);
+        // Log traffic light state
+        if (trafficLight) {
+            std::string stateStr;
+            switch (trafficLight->getCurrentState()) {
+                case TrafficLight::State::ALL_RED: stateStr = "ALL_RED"; break;
+                case TrafficLight::State::A_GREEN: stateStr = "A_GREEN"; break;
+                case TrafficLight::State::B_GREEN: stateStr = "B_GREEN"; break;
+                case TrafficLight::State::C_GREEN: stateStr = "C_GREEN"; break;
+                case TrafficLight::State::D_GREEN: stateStr = "D_GREEN"; break;
             }
-        } else {
-            // Update wait time for non-moving vehicles
-            vehicle->updateWaitTime(deltaTime);
+            DebugLogger::log("Current light state: " + stateStr, DebugLogger::LogLevel::INFO);
+        }
+
+        lastDebugTime = currentTime;
+    }
+}
+
+void TrafficManager::readVehicles() {
+    if (!fileHandler) {
+        DebugLogger::log("FileHandler not initialized", DebugLogger::LogLevel::ERROR);
+        return;
+    }
+
+    // Ensure directories exist before reading
+    if (!fileHandler->checkFilesExist()) {
+        if (!fileHandler->initializeFiles()) {
+            DebugLogger::log("Failed to initialize files", DebugLogger::LogLevel::ERROR);
+            return;
         }
     }
 
-    // Update turning progress
-    updateVehicleTurns(deltaTime);
-}
+    // Read new vehicles from files
+    std::vector<Vehicle*> newVehicles = fileHandler->readVehiclesFromFiles();
 
-void TrafficManager::updateVehicleTurns(float deltaTime) {
-    for (auto& [_, vehicle] : activeVehicles) {
-        if (vehicle->isInProcess() && vehicle->hasTurnStarted()) {
-            vehicle->updateTurnProgress(deltaTime);
+    if (!newVehicles.empty()) {
+        std::ostringstream oss;
+        oss << "Read " << newVehicles.size() << " new vehicles from files";
+        DebugLogger::log(oss.str());
 
-            // Check if turn is complete
-            if (vehicle->getTurnProgress() >= 1.0f) {
-                // Update lane based on turn direction
-                LaneId currentLane = vehicle->getCurrentLane();
-                Direction direction = vehicle->getDirection();
-
-                // Determine target lane based on current lane and direction
-                LaneId targetLane = currentLane;
-                int roadGroup = static_cast<int>(currentLane) / 3;
-
-                switch (direction) {
-                    case Direction::LEFT:
-                        // Left turns go to the next road counterclockwise
-                        targetLane = static_cast<LaneId>((roadGroup + 3) % 4 * 3 + 1); // Middle lane
-                        break;
-
-                    case Direction::RIGHT:
-                        // Right turns go to the next road clockwise
-                        targetLane = static_cast<LaneId>((roadGroup + 1) % 4 * 3 + 1); // Middle lane
-                        break;
-
-                    default:
-                        // Straight continues to opposite road
-                        targetLane = static_cast<LaneId>((roadGroup + 2) % 4 * 3 + 1); // Middle lane
-                        break;
-                }
-
-                vehicle->setTargetLane(targetLane);
-            }
+        // Add vehicles to appropriate lanes
+        for (auto* vehicle : newVehicles) {
+            addVehicle(vehicle);
         }
     }
+
+    // Write status to file periodically for monitoring
+    static uint32_t lastStatusTime = 0;
+    uint32_t currentTime = SDL_GetTicks();
+
+    if (currentTime - lastStatusTime >= 5000) { // Every 5 seconds
+        for (auto* lane : lanes) {
+            if (fileHandler && lane->getVehicleCount() > 0) {
+                fileHandler->writeLaneStatus(
+                    lane->getLaneId(),
+                    lane->getLaneNumber(),
+                    lane->getVehicleCount(),
+                    lane->isPriorityLane() && lane->getPriority() > 0
+                );
+            }
+        }
+        lastStatusTime = currentTime;
+    }
 }
 
-void TrafficManager::updateTrafficLights(float deltaTime) {
-    // Update each light's state
-    for (auto& [_, light] : trafficLights) {
-        light.update(deltaTime);
-    }
+void TrafficManager::addVehicle(Vehicle* vehicle) {
+    if (!vehicle) return;
 
-    if (inPriorityMode) {
-        // Priority mode: AL2 gets green, others red
-        trafficLights[LaneId::AL2_PRIORITY].setState(LightState::GREEN);
-        trafficLights[LaneId::BL2_NORMAL].setState(LightState::RED);
-        trafficLights[LaneId::CL2_NORMAL].setState(LightState::RED);
-        trafficLights[LaneId::DL2_NORMAL].setState(LightState::RED);
+    Lane* targetLane = findLane(vehicle->getLane(), vehicle->getLaneNumber());
+    if (targetLane) {
+        targetLane->enqueue(vehicle);
+
+        // Log the action
+        std::ostringstream oss;
+        oss << "Added vehicle " << vehicle->getId() << " to lane "
+            << vehicle->getLane() << vehicle->getLaneNumber();
+        DebugLogger::log(oss.str());
     } else {
-        // Normal mode: Alternate between N-S and E-W traffic
-        float cycleTime = 15.0f;
-        bool northSouthGreen = std::fmod(stateTimer, cycleTime * 2) < cycleTime;
-
-        trafficLights[LaneId::BL2_NORMAL].setState(northSouthGreen ? LightState::GREEN : LightState::RED);
-        trafficLights[LaneId::DL2_NORMAL].setState(northSouthGreen ? LightState::GREEN : LightState::RED);
-        trafficLights[LaneId::AL2_PRIORITY].setState(northSouthGreen ? LightState::RED : LightState::GREEN);
-        trafficLights[LaneId::CL2_NORMAL].setState(northSouthGreen ? LightState::RED : LightState::GREEN);
+        // Clean up if lane not found
+        delete vehicle;
+        DebugLogger::log("Error: No matching lane found for vehicle", DebugLogger::LogLevel::ERROR);
     }
 }
 
-void TrafficManager::synchronizeTrafficLights() {
-    // All traffic lights should have a consistent state
-    if (inPriorityMode) {
-        // In priority mode, only AL2 gets green
-        for (auto& [laneId, light] : trafficLights) {
-            light.setPriorityMode(true);
 
-            if (laneId == LaneId::AL2_PRIORITY) {
-                light.setState(LightState::GREEN);
+void TrafficManager::updatePriorities() {
+    // CRITICAL: First retrieve the priority lane (A2)
+    Lane* priorityLane = nullptr;
+    for (auto* lane : lanes) {
+        if (lane->getLaneId() == 'A' && lane->getLaneNumber() == 2) {
+            priorityLane = lane;
+            break;
+        }
+    }
+
+    if (!priorityLane) {
+        DebugLogger::log("ERROR: Priority lane A2 not found!", DebugLogger::LogLevel::ERROR);
+        return;
+    }
+
+    // CRITICAL: Check if priority condition is met (>10 vehicles in A2)
+    int vehicleCount = priorityLane->getVehicleCount();
+    int oldPriority = priorityLane->getPriority();
+
+    // PRIORITY CONDITION: A2 lane has more than 10 vehicles
+    if (vehicleCount > Constants::PRIORITY_THRESHOLD_HIGH && oldPriority == 0) {
+        // Activate priority mode
+        priorityLane->updatePriority();  // This will set priority to 100
+
+        DebugLogger::log("*** PRIORITY MODE ACTIVATED: A2 has " + std::to_string(vehicleCount) +
+                      " vehicles (>10) ***", DebugLogger::LogLevel::INFO);
+
+        // CRITICAL: Force traffic light to A green if not already
+        if (trafficLight && trafficLight->getCurrentState() != TrafficLight::State::A_GREEN) {
+            // Set next state to ALL_RED (transitional state)
+            trafficLight->setNextState(TrafficLight::State::ALL_RED);
+            DebugLogger::log("Forcing light transition to ALL_RED then A_GREEN due to priority mode");
+        }
+    }
+    // Check if we should exit priority mode (<5 vehicles)
+    else if (vehicleCount < Constants::PRIORITY_THRESHOLD_LOW && oldPriority > 0) {
+        // Deactivate priority mode
+        priorityLane->updatePriority();  // This will reset priority to 0
+
+        DebugLogger::log("*** PRIORITY MODE DEACTIVATED: A2 now has " + std::to_string(vehicleCount) +
+                      " vehicles (<5) ***", DebugLogger::LogLevel::INFO);
+    }
+
+    // CRITICAL: Also log current lane state
+    std::ostringstream oss;
+    oss << "Lane Status: ";
+    for (auto* lane : lanes) {
+        if (lane->getVehicleCount() > 0) {
+            oss << lane->getName() << ":" << lane->getVehicleCount() << " ";
+            if (lane->getPriority() > 0) {
+                oss << "(PRIORITY) ";
+            }
+        }
+    }
+    DebugLogger::log(oss.str(), DebugLogger::LogLevel::DEBUG);
+}
+
+
+void TrafficManager::processVehicles(uint32_t delta) {
+    // Determine which road has green light
+    char greenRoad = ' ';
+    if (trafficLight) {
+        auto state = trafficLight->getCurrentState();
+        if (state == TrafficLight::State::A_GREEN) greenRoad = 'A';
+        else if (state == TrafficLight::State::B_GREEN) greenRoad = 'B';
+        else if (state == TrafficLight::State::C_GREEN) greenRoad = 'C';
+        else if (state == TrafficLight::State::D_GREEN) greenRoad = 'D';
+    }
+
+    // CRITICAL: Process each lane independently with special rules
+    for (auto* lane : lanes) {
+        bool isGreenLight = false;
+
+        // RULE 1: If this is lane's road has green light, it can move
+        if (lane->getLaneId() == greenRoad) {
+            isGreenLight = true;
+        }
+        // RULE 2: Lane 3 (free lane) can ALWAYS move regardless of traffic light
+        else if (lane->getLaneNumber() == 3) {
+            isGreenLight = true;  // FREE LANE ALWAYS HAS GREEN LIGHT
+        }
+
+        // Get all vehicles in this lane
+        const auto& vehicles = lane->getVehicles();
+        int queuePos = 0;
+
+        // Update each vehicle
+        for (auto* vehicle : vehicles) {
+            if (vehicle) {
+                // CRITICAL: Update vehicle with correct light status
+                vehicle->update(delta, isGreenLight, 0.0f);
+                queuePos++;
+            }
+        }
+
+        // For priority lane A2, log movement status
+        if (lane->getLaneId() == 'A' && lane->getLaneNumber() == 2 && !vehicles.empty()) {
+            DebugLogger::log("A2 (Priority): " + std::to_string(vehicles.size()) +
+                          " vehicles, GreenLight=" + std::to_string(isGreenLight),
+                          DebugLogger::LogLevel::DEBUG);
+        }
+
+        // For free lanes, verify they're moving
+        if (lane->getLaneNumber() == 3 && !vehicles.empty()) {
+            DebugLogger::log(lane->getName() + " (Free lane): " +
+                          std::to_string(vehicles.size()) + " vehicles, GreenLight=true",
+                          DebugLogger::LogLevel::DEBUG);
+        }
+    }
+}
+
+void TrafficManager::checkVehicleBoundaries() {
+    for (auto* lane : lanes) {
+        // Check each vehicle
+        while (!lane->isEmpty()) {
+            Vehicle* vehicle = lane->peek();
+
+            if (vehicle && vehicle->hasExited()) {
+                // Remove the vehicle from the queue
+                Vehicle* removedVehicle = lane->dequeue();
+
+                // Log vehicle exit with lane info
+                std::ostringstream oss;
+                oss << "Vehicle " << removedVehicle->getId() << " exited the simulation from lane "
+                    << removedVehicle->getLane() << removedVehicle->getLaneNumber();
+                DebugLogger::log(oss.str());
+
+                // Delete the vehicle
+                delete removedVehicle;
             } else {
-                light.setState(LightState::RED);
-            }
-        }
-    } else {
-        // In normal mode, we alternate N-S and E-W
-        for (auto& [_, light] : trafficLights) {
-            light.setPriorityMode(false);
-        }
-
-        // Initial setup: N-S green
-        trafficLights[LaneId::BL2_NORMAL].setState(LightState::GREEN);
-        trafficLights[LaneId::DL2_NORMAL].setState(LightState::GREEN);
-        trafficLights[LaneId::AL2_PRIORITY].setState(LightState::RED);
-        trafficLights[LaneId::CL2_NORMAL].setState(LightState::RED);
-    }
-}
-
-void TrafficManager::handleStateTransition(float deltaTime) {
-    bool shouldBePriority = checkPriorityConditions();
-
-    if (shouldBePriority && !inPriorityMode) {
-        if (stateTimer >= SimConstants::MIN_STATE_TIME) {
-            inPriorityMode = true;
-            stateTimer = 0.0f;
-            synchronizeTrafficLights();
-            std::cout << "Switching to PRIORITY mode" << std::endl;
-        }
-    } else if (!shouldBePriority && inPriorityMode) {
-        auto* priorityLane = getPriorityLane();
-        if (priorityLane && priorityLane->getQueueSize() <= SimConstants::NORMAL_THRESHOLD &&
-            stateTimer >= SimConstants::MIN_STATE_TIME) {
-            inPriorityMode = false;
-            stateTimer = 0.0f;
-            synchronizeTrafficLights();
-            std::cout << "Switching to NORMAL mode" << std::endl;
-        }
-    }
-
-    // Force state change if stuck too long
-    if (stateTimer >= SimConstants::MAX_WAIT_TIME) {
-        inPriorityMode = !inPriorityMode;
-        stateTimer = 0.0f;
-        synchronizeTrafficLights();
-        std::cout << "FORCED mode switch after timeout" << std::endl;
-    }
-}
-
-bool TrafficManager::checkPriorityConditions() const {
-    // Check if priority lane exceeds threshold
-    auto* priorityLane = getPriorityLane();
-    if (!priorityLane) return false;
-
-    return priorityLane->getQueueSize() > SimConstants::PRIORITY_THRESHOLD;
-}
-
-void TrafficManager::processNewVehicles() {
-    // Get new vehicles from files
-    auto newVehicles = fileHandler.readNewVehicles();
-
-    for (const auto& [laneId, vehicle] : newVehicles) {
-        // Check if this is a valid lane for the vehicle's direction
-        LaneId optimalLane = determineOptimalLane(vehicle->getDirection(), laneId);
-
-        if (isValidSpawnLane(optimalLane, vehicle->getDirection())) {
-            addVehicleToLane(optimalLane, vehicle);
-            std::cout << "Vehicle " << vehicle->getId() << " added to lane "
-                     << static_cast<int>(optimalLane) << std::endl;
-        } else {
-            std::cerr << "Invalid spawn configuration for vehicle " << vehicle->getId() << std::endl;
-        }
-    }
-}
-
-LaneId TrafficManager::determineOptimalLane(Direction direction, LaneId sourceLane) const {
-    int roadGroup = static_cast<int>(sourceLane) / 3;
-
-    switch (direction) {
-        case Direction::LEFT:
-            // Left turns use the 3rd lane (freelane)
-            return static_cast<LaneId>(roadGroup * 3 + 2);
-
-        case Direction::RIGHT:
-            // Right turns use the 1st lane
-            return static_cast<LaneId>(roadGroup * 3);
-
-        default: // STRAIGHT
-            // Check queue sizes of 1st and 2nd lanes to balance
-            LaneId lane1 = static_cast<LaneId>(roadGroup * 3);     // First lane
-            LaneId lane2 = static_cast<LaneId>(roadGroup * 3 + 1); // Second lane
-
-            size_t lane1Size = getLaneSize(lane1);
-            size_t lane2Size = getLaneSize(lane2);
-
-            // Choose lane with shortest queue
-            return (lane1Size <= lane2Size) ? lane1 : lane2;
-    }
-}
-
-bool TrafficManager::isValidSpawnLane(LaneId laneId, Direction direction) const {
-    int laneInRoad = static_cast<int>(laneId) % 3;
-
-    switch (direction) {
-        case Direction::LEFT:  return laneInRoad == 2; // Only 3rd lane for left turns
-        case Direction::RIGHT: return laneInRoad == 0; // 1st lane for right turns
-        default:               return laneInRoad == 0 || laneInRoad == 1; // 1st or 2nd for straight
-    }
-}
-
-void TrafficManager::processPriorityLane() {
-    auto* priorityLane = getPriorityLane();
-    if (!priorityLane) return;
-
-    size_t initialSize = priorityLane->getQueueSize();
-    size_t processCount = 0;
-
-    // Process until below normal threshold or max count reached
-    while (priorityLane->getQueueSize() > SimConstants::NORMAL_THRESHOLD &&
-           processCount < initialSize) {
-        auto vehicle = priorityLane->removeVehicle();
-        if (vehicle) {
-            vehicle->setProcessing(true);
-            processCount++;
-            totalVehiclesProcessed++;
-        }
-    }
-
-    std::cout << "Priority mode: Processed " << processCount << " vehicles" << std::endl;
-}
-
-void TrafficManager::processNormalLanes(size_t vehicleCount) {
-    if (vehicleCount == 0) return;
-
-    // Count of vehicles to process per normal lane
-    for (auto& lane : lanes) {
-        if (!lane->isPriorityLane() && !isFreeLane(lane->getId())) {
-            for (size_t i = 0; i < vehicleCount && lane->getQueueSize() > 0; ++i) {
-                auto vehicle = lane->removeVehicle();
-                if (vehicle) {
-                    vehicle->setProcessing(true);
-                    totalVehiclesProcessed++;
-                }
-            }
-        }
-    }
-
-    std::cout << "Normal mode: Processed " << vehicleCount << " vehicles per lane" << std::endl;
-}
-
-void TrafficManager::processFreeLanes() {
-    // Free lanes (third lane of each road) always process all their vehicles
-    for (auto& lane : lanes) {
-        if (isFreeLane(lane->getId())) {
-            size_t initialSize = lane->getQueueSize();
-            size_t processCount = 0;
-
-            while (lane->getQueueSize() > 0) {
-                auto vehicle = lane->removeVehicle();
-                if (vehicle) {
-                    vehicle->setProcessing(true);
-                    processCount++;
-                    totalVehiclesProcessed++;
-                }
-            }
-
-            if (processCount > 0) {
-                std::cout << "Free lane " << static_cast<int>(lane->getId())
-                         << ": Processed " << processCount << " vehicles" << std::endl;
+                // If the first vehicle hasn't exited, the rest haven't either
+                break;
             }
         }
     }
 }
 
-size_t TrafficManager::calculateVehiclesToProcess() const {
-    // Formula: |V| = (1/n) * Σ|Li|
-    size_t totalVehicles = 0;
-    size_t normalLaneCount = 0;
-
-    for (const auto& lane : lanes) {
-        if (!lane->isPriorityLane() && !isFreeLane(lane->getId())) {
-            totalVehicles += lane->getQueueSize();
-            normalLaneCount++;
+Lane* TrafficManager::findLane(char laneId, int laneNumber) const {
+    for (auto* lane : lanes) {
+        if (lane->getLaneId() == laneId && lane->getLaneNumber() == laneNumber) {
+            return lane;
         }
     }
-
-    return normalLaneCount > 0 ?
-        static_cast<size_t>(std::ceil(static_cast<float>(totalVehicles) / normalLaneCount)) : 0;
+    return nullptr;
 }
 
-void TrafficManager::checkWaitTimes() {
-    using namespace SimConstants;
-
-    // Check if any vehicle has been waiting too long
-    for (auto& lane : lanes) {
-        if (lane->getQueueSize() > 0 && !isFreeLane(lane->getId())) {
-            // Process vehicles with excessive wait time
-            if (lane->getAverageWaitTime() > MAX_WAIT_TIME) {
-                auto vehicle = lane->removeVehicle();
-                if (vehicle) {
-                    vehicle->setProcessing(true);
-                    totalVehiclesProcessed++;
-                    std::cout << "Processing vehicle with excessive wait time: "
-                             << vehicle->getId() << std::endl;
-                }
-            }
-        }
-    }
+const std::vector<Lane*>& TrafficManager::getLanes() const {
+    return lanes;
 }
 
-void TrafficManager::updateTimers(float deltaTime) {
-    stateTimer += deltaTime;
-    processingTimer += deltaTime;
-    lastUpdateTime += deltaTime;
+TrafficLight* TrafficManager::getTrafficLight() const {
+    return trafficLight;
 }
 
-void TrafficManager::updateStatistics(float deltaTime) {
-    // Update average wait time for vehicles
-    float totalWaitTime = 0.0f;
-    size_t waitingVehicles = 0;
-
-    for (const auto& [_, vehicle] : activeVehicles) {
-        if (!vehicle->isInProcess()) {
-            totalWaitTime += vehicle->getWaitTime();
-            waitingVehicles++;
-        }
-    }
-
-    if (waitingVehicles > 0) {
-        averageWaitTime = totalWaitTime / static_cast<float>(waitingVehicles);
-    }
-}
-
-float TrafficManager::getAverageWaitingTime() const {
-    return averageWaitTime;
-}
-
-bool TrafficManager::isFreeLane(LaneId laneId) const {
-    return laneId == LaneId::AL3_FREELANE ||
-           laneId == LaneId::BL3_FREELANE ||
-           laneId == LaneId::CL3_FREELANE ||
-           laneId == LaneId::DL3_FREELANE;
+bool TrafficManager::isLanePrioritized(char laneId, int laneNumber) const {
+    Lane* lane = findLane(laneId, laneNumber);
+    return lane && lane->isPriorityLane() && lane->getPriority() > 0;
 }
 
 Lane* TrafficManager::getPriorityLane() const {
-    auto it = std::find_if(lanes.begin(), lanes.end(),
-        [](const auto& lane) { return lane->isPriorityLane(); });
-    return it != lanes.end() ? it->get() : nullptr;
+    return findLane('A', 2); // AL2 is the priority lane
 }
 
-void TrafficManager::cleanupFinishedVehicles() {
-    // Remove vehicles that have left the scene
-    std::vector<uint32_t> toRemove;
+std::string TrafficManager::getStatistics() const {
+    std::ostringstream stats;
+    stats << "Lane Statistics:\n";
+    int totalVehicles = 0;
 
-    for (const auto& [id, vehicle] : activeVehicles) {
-        // Check if vehicle has exited the screen bounds
-        float x = vehicle->getX();
-        float y = vehicle->getY();
+    for (auto* lane : lanes) {
+        int count = lane->getVehicleCount();
+        totalVehicles += count;
 
-        bool outOfBounds = (
-            x < -SimConstants::VEHICLE_WIDTH * 2 ||
-            x > SimConstants::WINDOW_WIDTH + SimConstants::VEHICLE_WIDTH * 2 ||
-            y < -SimConstants::VEHICLE_HEIGHT * 2 ||
-            y > SimConstants::WINDOW_HEIGHT + SimConstants::VEHICLE_HEIGHT * 2
-        );
-
-        if (outOfBounds) {
-            toRemove.push_back(id);
+        stats << lane->getName() << ": " << count << " vehicles";
+        if (lane->isPriorityLane() && lane->getPriority() > 0) {
+            stats << " (PRIORITY)";
         }
+        stats << "\n";
     }
 
-    // Remove the vehicles marked for removal
-    for (uint32_t id : toRemove) {
-        removeVehicle(id);
+    stats << "Total Vehicles: " << totalVehicles << "\n";
+
+    // Add traffic light status
+    if (trafficLight) {
+        stats << "Traffic Light: ";
+        switch (trafficLight->getCurrentState()) {
+            case TrafficLight::State::ALL_RED: stats << "ALL RED"; break;
+            case TrafficLight::State::A_GREEN: stats << "A GREEN"; break;
+            case TrafficLight::State::B_GREEN: stats << "B GREEN"; break;
+            case TrafficLight::State::C_GREEN: stats << "C GREEN"; break;
+            case TrafficLight::State::D_GREEN: stats << "D GREEN"; break;
+        }
+        stats << "\n";
     }
+
+    return stats.str();
 }
 
-void TrafficManager::removeVehicle(uint32_t vehicleId) {
-    activeVehicles.erase(vehicleId);
-}
 
-bool TrafficManager::checkCollision(const std::shared_ptr<Vehicle>& vehicle, float newX, float newY) const {
-    using namespace SimConstants;
+void TrafficManager::limitVehiclesPerLane() {
+    const int MAX_VEHICLES_PER_LANE = 12; // Maximum vehicles allowed in a single lane
 
-    const float MIN_DISTANCE = VEHICLE_WIDTH * 1.5f;
+    for (auto* lane : lanes) {
+        int count = lane->getVehicleCount();
 
-    for (const auto& [otherId, otherVehicle] : activeVehicles) {
-        if (otherId != vehicle->getId()) {
-            float dx = newX - otherVehicle->getX();
-            float dy = newY - otherVehicle->getY();
-            float distance = std::sqrt(dx * dx + dy * dy);
+        // If lane has too many vehicles, remove some from the end (farthest from intersection)
+        if (count > MAX_VEHICLES_PER_LANE) {
+            int toRemove = count - MAX_VEHICLES_PER_LANE;
 
-            if (distance < MIN_DISTANCE) {
-                return true;
+            DebugLogger::log("Lane " + lane->getName() + " has " + std::to_string(count) +
+                           " vehicles (max " + std::to_string(MAX_VEHICLES_PER_LANE) +
+                           ") - removing " + std::to_string(toRemove),
+                           DebugLogger::LogLevel::WARNING);
+
+            // Get all vehicles
+            const auto& vehicles = lane->getVehicles();
+
+            // Remove vehicles starting from the end of the queue (furthest from intersection)
+            for (int i = 0; i < toRemove && !lane->isEmpty(); i++) {
+                // We have to dequeue all vehicles and re-enqueue except the last one
+                std::vector<Vehicle*> tempVehicles;
+                int keepCount = count - (i + 1);
+
+                // Dequeue all vehicles except the one to remove
+                for (int j = 0; j < keepCount; j++) {
+                    if (!lane->isEmpty()) {
+                        Vehicle* v = lane->dequeue();
+                        if (v) {
+                            tempVehicles.push_back(v);
+                        }
+                    }
+                }
+
+                // Now remove the target vehicle
+                if (!lane->isEmpty()) {
+                    Vehicle* toDelete = lane->dequeue();
+                    if (toDelete) {
+                        delete toDelete;
+                    }
+                }
+
+                // Re-enqueue the kept vehicles
+                for (auto* v : tempVehicles) {
+                    lane->enqueue(v);
+                }
             }
         }
     }
+}
 
-    return false;
+
+
+void TrafficManager::preventVehicleOverlap() {
+    // For each lane, check for vehicles that are too close to each other
+    for (auto* lane : lanes) {
+        const auto& vehicles = lane->getVehicles();
+
+        // Skip if fewer than 2 vehicles
+        if (vehicles.size() < 2) continue;
+
+        // Check each vehicle against others in the lane
+        for (size_t i = 0; i < vehicles.size() - 1; i++) {
+            Vehicle* current = vehicles[i];
+            Vehicle* next = vehicles[i+1];
+
+            if (!current || !next) continue;
+
+            // Calculate distance between vehicles
+            float dx = current->getTurnPosX() - next->getTurnPosX();
+            float dy = current->getTurnPosY() - next->getTurnPosY();
+            float distance = std::sqrt(dx*dx + dy*dy);
+
+            // Minimum distance between vehicles
+            const float MIN_DISTANCE = 35.0f;
+
+            // If too close, adjust next vehicle position
+            if (distance < MIN_DISTANCE) {
+                // Normalize direction vector
+                float normalize = distance > 0 ? distance : 1.0f;
+                dx /= normalize;
+                dy /= normalize;
+
+                // Move next vehicle back to maintain spacing
+                float moveDistance = MIN_DISTANCE - distance;
+                next->setTurnPosX(next->getTurnPosX() - dx * moveDistance);
+                next->setTurnPosY(next->getTurnPosY() - dy * moveDistance);
+            }
+        }
+    }
 }

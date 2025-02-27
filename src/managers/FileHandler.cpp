@@ -1,370 +1,317 @@
+// FILE: src/managers/FileHandler.cpp
 #include "managers/FileHandler.h"
+#include "utils/DebugLogger.h"
 #include <fstream>
 #include <sstream>
-#include <iostream>
+#include <filesystem>
+#include <thread>
+#include <chrono>
 
-const std::string FileHandler::BASE_PATH = "data/lanes";
+namespace fs = std::filesystem;
 
-FileHandler::FileHandler() {
-    try {
-        initializeFileSystem();
-        startFileWatching();
-    } catch (const std::exception& e) {
-        std::cerr << "FileHandler initialization failed: " << e.what() << std::endl;
-        throw;
-    }
+FileHandler::FileHandler(const std::string& dataPath)
+    : dataPath(dataPath) {
+
+    DebugLogger::log("FileHandler created with path: " + dataPath);
 }
 
-void FileHandler::initializeFileSystem() {
-    // Setup data directory path
-    // Use current_path() for relative paths that work in any build configuration
-    dataDir = (std::filesystem::current_path() / BASE_PATH).lexically_normal();
-    std::cout << "[FileHandler] Using path: " << dataDir << std::endl;
+FileHandler::~FileHandler() {
+    DebugLogger::log("FileHandler destroyed");
+}
 
-    // Ensure the directory exists before accessing it
-    if (!std::filesystem::exists(dataDir)) {
-        std::cout << "[FileHandler] Creating directory: " << dataDir << std::endl;
-        try {
-            std::filesystem::create_directories(dataDir);
-        } catch (const std::exception& e) {
-            std::cerr << "[FileHandler] Error creating directory: " << e.what() << std::endl;
-            throw;
+std::vector<Vehicle*> FileHandler::readVehiclesFromFiles() {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::vector<Vehicle*> vehicles;
+
+    // Ensure directory exists before trying to read
+    if (!fs::exists(dataPath)) {
+        DebugLogger::log("Data path doesn't exist: " + dataPath, DebugLogger::LogLevel::WARNING);
+        return vehicles;
+    }
+
+    // Read from each lane file (A, B, C, D)
+    for (char laneId : {'A', 'B', 'C', 'D'}) {
+        std::string filePath = getLaneFilePath(laneId);
+
+        // Only try to read if file exists
+        if (fs::exists(filePath)) {
+            auto laneVehicles = readVehiclesFromFile(laneId);
+            vehicles.insert(vehicles.end(), laneVehicles.begin(), laneVehicles.end());
         }
     }
 
-    // Initialize lane file paths
-    laneFiles = {
-        {LaneId::AL1_INCOMING, (dataDir / "lane_a1.txt").lexically_normal()},
-        {LaneId::AL2_PRIORITY, (dataDir / "lane_a2.txt").lexically_normal()},
-        {LaneId::AL3_FREELANE, (dataDir / "lane_a3.txt").lexically_normal()},
-        {LaneId::BL1_INCOMING, (dataDir / "lane_b1.txt").lexically_normal()},
-        {LaneId::BL2_NORMAL,   (dataDir / "lane_b2.txt").lexically_normal()},
-        {LaneId::BL3_FREELANE, (dataDir / "lane_b3.txt").lexically_normal()},
-        {LaneId::CL1_INCOMING, (dataDir / "lane_c1.txt").lexically_normal()},
-        {LaneId::CL2_NORMAL,   (dataDir / "lane_c2.txt").lexically_normal()},
-        {LaneId::CL3_FREELANE, (dataDir / "lane_c3.txt").lexically_normal()},
-        {LaneId::DL1_INCOMING, (dataDir / "lane_d1.txt").lexically_normal()},
-        {LaneId::DL2_NORMAL,   (dataDir / "lane_d2.txt").lexically_normal()},
-        {LaneId::DL3_FREELANE, (dataDir / "lane_d3.txt").lexically_normal()}
-    };
+    // If we found any vehicles, log the total
+    if (!vehicles.empty()) {
+        std::ostringstream oss;
+        oss << "Read " << vehicles.size() << " vehicles from lane files";
+        DebugLogger::log(oss.str());
+    }
 
-    // Try to access a file to check permissions
-    std::cout << "[FileHandler] Checking file access" << std::endl;
-
-    // Initialize all files
-    clearLaneFiles(); // This will create empty files
+    return vehicles;
 }
 
-std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> FileHandler::readNewVehicles() {
-    std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> newVehicles;
-    std::lock_guard<std::mutex> lock(fileMutex);
+std::vector<Vehicle*> FileHandler::readVehiclesFromFile(char laneId) {
+    std::vector<Vehicle*> vehicles;
+    std::string filePath = getLaneFilePath(laneId);
 
-    // First try to read from combined file (for compatibility with C code)
+    // Multiple attempts to open file (addresses file locking issues)
+    std::ifstream file;
+    int attempts = 0;
+    while (attempts < 3) {
+        file.open(filePath);
+        if (file.is_open()) {
+            break;
+        }
+        // Wait and retry if file is locked
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        attempts++;
+    }
+
+    if (!file.is_open()) {
+        return vehicles;
+    }
+
+    std::vector<std::string> lines;
+    std::string line;
+
+    // Read all lines from file
+    while (std::getline(file, line)) {
+        if (!line.empty()) {
+            lines.push_back(line);
+        }
+    }
+    file.close();
+
+    // Don't modify file if no lines were read
+    if (lines.empty()) {
+        return vehicles;
+    }
+
+    // Process lines first before clearing file (prevents data loss if parsing fails)
+    std::vector<Vehicle*> parsedVehicles;
+    for (const auto& line : lines) {
+        Vehicle* vehicle = parseVehicleLine(line);
+        if (vehicle) {
+            parsedVehicles.push_back(vehicle);
+        }
+    }
+
+    // Clear the file after reading to prevent duplicates - with error handling
+    bool fileClearedSuccessfully = false;
+    attempts = 0;
+    while (!fileClearedSuccessfully && attempts < 3) {
+        try {
+            std::ofstream clearFile(filePath, std::ios::trunc);
+            if (clearFile.is_open()) {
+                clearFile.close();
+                fileClearedSuccessfully = true;
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                attempts++;
+            }
+        } catch (const std::exception& e) {
+            DebugLogger::log("Error clearing file: " + std::string(e.what()), DebugLogger::LogLevel::ERROR);
+            attempts++;
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+
+    if (!fileClearedSuccessfully) {
+        DebugLogger::log("Failed to clear file after reading: " + filePath, DebugLogger::LogLevel::ERROR);
+    }
+
+    // Log number of vehicles read
+    if (!parsedVehicles.empty()) {
+        std::ostringstream oss;
+        oss << "Read " << parsedVehicles.size() << " vehicles from lane " << laneId;
+        DebugLogger::log(oss.str());
+    }
+
+    return parsedVehicles;
+}
+
+Vehicle* FileHandler::parseVehicleLine(const std::string& line) {
+    // Expected formats:
+    // "vehicleId_L{laneNumber}:laneId"
+    // "vehicleId_L{laneNumber}_DIRECTION:laneId"
+    size_t pos = line.find(":");
+    if (pos == std::string::npos) {
+        DebugLogger::log("Error parsing line (missing colon): " + line, DebugLogger::LogLevel::ERROR);
+        return nullptr;
+    }
+
+    std::string vehicleId = line.substr(0, pos);
+
+    // Ensure there's a lane ID after the colon
+    if (pos + 1 >= line.length()) {
+        DebugLogger::log("Error parsing line (missing lane ID): " + line, DebugLogger::LogLevel::ERROR);
+        return nullptr;
+    }
+
+    char laneId = line[pos + 1];
+
+    // Extract lane number from ID (format: V1_L2 where 2 is the lane number)
+    int laneNumber = 2; // Default is lane 2
+    size_t lanePos = vehicleId.find("_L");
+    if (lanePos != std::string::npos && lanePos + 2 < vehicleId.length()) {
+        char laneNumChar = vehicleId[lanePos + 2];
+        if (laneNumChar >= '1' && laneNumChar <= '3') {
+            laneNumber = laneNumChar - '0';
+        }
+    }
+
+    // Don't spawn vehicles in Lane 1 (L1)
+    if (laneNumber == 1) {
+        DebugLogger::log("Ignoring vehicle in Lane 1: " + line, DebugLogger::LogLevel::WARNING);
+        return nullptr;
+    }
+
+    // Determine direction from ID - important for vehicle behavior
+    Destination destination = Destination::STRAIGHT; // Default
+
+    if (laneNumber == 3) {
+        // Lane 3 always turns LEFT
+        destination = Destination::LEFT;
+    } else if (laneNumber == 2) {
+        // Check for direction in ID
+        if (vehicleId.find("_LEFT") != std::string::npos) {
+            destination = Destination::LEFT;
+        } else if (vehicleId.find("_STRAIGHT") != std::string::npos) {
+            destination = Destination::STRAIGHT;
+        } else {
+            // Default for L2 if not specified is STRAIGHT
+            destination = Destination::STRAIGHT;
+        }
+    }
+
+    // Determine if it's an emergency vehicle
+    bool isEmergency = vehicleId.find("_E") != std::string::npos || vehicleId.find("E_") != std::string::npos;
+
+    // Validate lane ID
+    if (laneId != 'A' && laneId != 'B' && laneId != 'C' && laneId != 'D') {
+        DebugLogger::log("Invalid lane ID in line: " + line, DebugLogger::LogLevel::ERROR);
+        return nullptr;
+    }
+
+    // Create the vehicle with the specified destination
+    Vehicle* vehicle = new Vehicle(vehicleId, laneId, laneNumber, isEmergency);
+    vehicle->setDestination(destination);
+
+    std::ostringstream oss;
+    oss << "Created vehicle " << vehicleId << " for lane " << laneId << laneNumber;
+    switch (destination) {
+        case Destination::STRAIGHT: oss << " (STRAIGHT)"; break;
+        case Destination::LEFT: oss << " (LEFT)"; break;
+        case Destination::RIGHT: oss << " (RIGHT)"; break;
+    }
+    if (isEmergency) {
+        oss << " [EMERGENCY]";
+    }
+    DebugLogger::log(oss.str());
+
+    return vehicle;
+}
+
+void FileHandler::writeLaneStatus(char laneId, int laneNumber, int vehicleCount, bool isPriority) {
+    std::lock_guard<std::mutex> lock(mutex);
+    std::string statusPath = getLaneStatusFilePath();
+
+    // Make sure the directory exists
+    fs::path dir = fs::path(statusPath).parent_path();
+    if (!fs::exists(dir)) {
+        try {
+            fs::create_directories(dir);
+        } catch (const std::exception& e) {
+            DebugLogger::log("Error creating directory: " + std::string(e.what()),
+                           DebugLogger::LogLevel::ERROR);
+            return;
+        }
+    }
+
+    std::ofstream file(statusPath, std::ios::app);
+    if (file.is_open()) {
+        file << laneId << laneNumber << ": " << vehicleCount << " vehicles"
+             << (isPriority ? " (PRIORITY)" : "") << std::endl;
+        file.close();
+    } else {
+        DebugLogger::log("Warning: Could not open lane status file for writing",
+                       DebugLogger::LogLevel::WARNING);
+    }
+}
+
+bool FileHandler::checkFilesExist() {
+    // Make sure data directory exists
+    if (!fs::exists(dataPath)) {
+        DebugLogger::log("Data directory doesn't exist: " + dataPath, DebugLogger::LogLevel::WARNING);
+        return false;
+    }
+
+    // Check for lane files
+    bool allFilesExist = true;
+    for (char laneId : {'A', 'B', 'C', 'D'}) {
+        std::string filePath = getLaneFilePath(laneId);
+        if (!fs::exists(filePath)) {
+            DebugLogger::log("Lane file doesn't exist: " + filePath, DebugLogger::LogLevel::WARNING);
+            allFilesExist = false;
+        }
+    }
+
+    return allFilesExist;
+}
+
+bool FileHandler::initializeFiles() {
+    std::lock_guard<std::mutex> lock(mutex);
+
     try {
-        if (std::filesystem::exists(vehicleDataFile)) {
-            std::ifstream file(vehicleDataFile);
-            if (file) {
-                std::string line;
-                while (std::getline(file, line)) {
-                    if (line.empty()) continue;
+        // Create data directory if it doesn't exist
+        if (!fs::exists(dataPath)) {
+            if (!fs::create_directories(dataPath)) {
+                DebugLogger::log("Error: Failed to create directory " + dataPath,
+                               DebugLogger::LogLevel::ERROR);
+                return false;
+            }
+            DebugLogger::log("Created directory: " + dataPath);
+        }
 
-                    // Parse line in format "vehicleId:road"
-                    size_t colonPos = line.find(':');
-                    if (colonPos != std::string::npos) {
-                        std::string vehicleId = line.substr(0, colonPos);
-                        char roadChar = line[colonPos + 1];
-
-                        // Determine lane based on vehicle ID and road
-                        LaneId lane;
-                        Direction direction = Direction::STRAIGHT;
-                        bool isEmergency = false;
-
-                        // Parse direction/emergency from ID
-                        if (vehicleId.find("L1") != std::string::npos) {
-                            lane = roadChar == 'A' ? LaneId::AL1_INCOMING :
-                                   roadChar == 'B' ? LaneId::BL1_INCOMING :
-                                   roadChar == 'C' ? LaneId::CL1_INCOMING :
-                                   LaneId::DL1_INCOMING;
-                        }
-                        else if (vehicleId.find("L2") != std::string::npos) {
-                            lane = roadChar == 'A' ? LaneId::AL2_PRIORITY :
-                                   roadChar == 'B' ? LaneId::BL2_NORMAL :
-                                   roadChar == 'C' ? LaneId::CL2_NORMAL :
-                                   LaneId::DL2_NORMAL;
-                        }
-                        else if (vehicleId.find("L3") != std::string::npos) {
-                            lane = roadChar == 'A' ? LaneId::AL3_FREELANE :
-                                   roadChar == 'B' ? LaneId::BL3_FREELANE :
-                                   roadChar == 'C' ? LaneId::CL3_FREELANE :
-                                   LaneId::DL3_FREELANE;
-                            direction = Direction::LEFT; // L3 lanes are for left turns
-                        }
-                        else {
-                            // Default to middle lane
-                            lane = roadChar == 'A' ? LaneId::AL2_PRIORITY :
-                                   roadChar == 'B' ? LaneId::BL2_NORMAL :
-                                   roadChar == 'C' ? LaneId::CL2_NORMAL :
-                                   LaneId::DL2_NORMAL;
-                        }
-
-                        // Check for emergency vehicles
-                        isEmergency = vehicleId.find("EMG") != std::string::npos;
-
-                        // Create vehicle
-                        uint32_t id = static_cast<uint32_t>(std::hash<std::string>{}(vehicleId));
-                        auto vehicle = std::make_shared<Vehicle>(id, direction, lane, isEmergency);
-                        newVehicles.emplace_back(lane, vehicle);
-                    }
+        // Create lane files if they don't exist
+        for (char laneId : {'A', 'B', 'C', 'D'}) {
+            std::string filePath = getLaneFilePath(laneId);
+            if (!fs::exists(filePath)) {
+                std::ofstream file(filePath);
+                if (!file.is_open()) {
+                    DebugLogger::log("Error: Failed to create file " + filePath,
+                                   DebugLogger::LogLevel::ERROR);
+                    return false;
                 }
-
-                // Clear file after reading
                 file.close();
-                std::ofstream clearFile(vehicleDataFile, std::ios::trunc);
+                DebugLogger::log("Created file: " + filePath);
             }
         }
+
+        // Create or clear lane status file
+        std::string statusPath = getLaneStatusFilePath();
+        std::ofstream statusFile(statusPath, std::ios::trunc);
+        if (!statusFile.is_open()) {
+            DebugLogger::log("Error: Failed to create lane status file",
+                           DebugLogger::LogLevel::ERROR);
+            return false;
+        }
+        statusFile << "=== Lane Status Log ===\n";
+        statusFile.close();
+
+        DebugLogger::log("All files initialized successfully");
+        return true;
     } catch (const std::exception& e) {
-        handleFileError("reading combined file", vehicleDataFile, e);
-    }
-
-    // Then try to read from individual lane files
-    for (const auto& [laneId, filepath] : laneFiles) {
-        try {
-            if (!std::filesystem::exists(filepath)) continue;
-
-            std::ifstream file(filepath);
-            if (!file) continue;
-
-            std::string line;
-            std::vector<std::string> lines;
-            while (std::getline(file, line)) {
-                if (!line.empty()) {
-                    lines.push_back(line);
-                }
-            }
-
-            // Clear file after reading
-            file.close();
-            std::ofstream clearFile(filepath, std::ios::trunc);
-
-            // Process lines
-            for (const auto& line : lines) {
-                auto vehicle = parseVehicleLine(line, laneId);
-                if (vehicle) {
-                    newVehicles.emplace_back(laneId, vehicle);
-                }
-            }
-        } catch (const std::exception& e) {
-            handleFileError("reading file", filepath, e);
-        }
-    }
-
-    return newVehicles;
-}
-
-std::shared_ptr<Vehicle> FileHandler::parseVehicleLine(const std::string& line, LaneId laneId) {
-    size_t commaPos = line.find(',');
-    size_t semicolonPos = line.find(';');
-
-    // Simple format parsing: "id,direction;..."
-    if (commaPos == std::string::npos || semicolonPos == std::string::npos) {
-        return nullptr;
-    }
-
-    try {
-        uint32_t id = std::stoul(line.substr(0, commaPos));
-        char dirChar = line[commaPos + 1];
-
-        Direction dir;
-        switch (dirChar) {
-            case 'S': dir = Direction::STRAIGHT; break;
-            case 'L': dir = Direction::LEFT; break;
-            case 'R': dir = Direction::RIGHT; break;
-            default: return nullptr;
-        }
-
-        // Check if 3rd lane with non-left turn (invalid)
-        if (static_cast<int>(laneId) % 3 == 2 && dir != Direction::LEFT) {
-            // 3rd lanes are only for left turns
-            dir = Direction::LEFT;
-        }
-
-        return std::make_shared<Vehicle>(id, dir, laneId);
-    } catch (const std::exception& e) {
-        std::cerr << "Error parsing line: " << line << " - " << e.what() << std::endl;
-        return nullptr;
+        DebugLogger::log("Error initializing files: " + std::string(e.what()),
+                       DebugLogger::LogLevel::ERROR);
+        return false;
     }
 }
 
-void FileHandler::clearLaneFiles() {
-    std::lock_guard<std::mutex> lock(fileMutex);
-
-    for (const auto& [laneId, filepath] : laneFiles) {
-        try {
-            std::cout << "[FileHandler] Clearing file: " << filepath << std::endl;
-            std::ofstream file(filepath, std::ios::trunc);
-            if (!file) {
-                std::cerr << "[FileHandler] Could not open file for writing: " << filepath << std::endl;
-            }
-        } catch (const std::exception& e) {
-            std::cerr << "[FileHandler] Error clearing file " << filepath << ": " << e.what() << std::endl;
-        }
-    }
-
-    // Clear combined vehicle data file for compatibility with C implementation
-    try {
-        std::cout << "[FileHandler] Clearing combined vehicle file" << std::endl;
-        std::ofstream file("vehicles.data", std::ios::trunc);
-        if (!file) {
-            std::cerr << "[FileHandler] Could not open vehicles.data for writing" << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "[FileHandler] Error clearing vehicles.data: " << e.what() << std::endl;
-    }
+std::string FileHandler::getLaneFilePath(char laneId) const {
+    return dataPath + "/lane" + laneId + ".txt";
 }
 
-
-size_t FileHandler::getVehicleCountInFile(LaneId laneId) const {
-    auto it = laneFiles.find(laneId);
-    if (it == laneFiles.end()) return 0;
-
-    try {
-        std::ifstream file(it->second);
-        if (!file) return 0;
-
-        size_t count = 0;
-        std::string line;
-        while (std::getline(file, line)) {
-            if (!line.empty()) count++;
-        }
-        return count;
-    } catch (const std::exception& e) {
-        std::cerr << "Error counting vehicles: " << e.what() << std::endl;
-        return 0;
-    }
-}
-
-void FileHandler::ensureDirectoryExists(const std::filesystem::path& dir) {
-    if (!std::filesystem::exists(dir)) {
-        if (!std::filesystem::create_directories(dir)) {
-            throw std::runtime_error("Failed to create directory: " + dir.string());
-        }
-    }
-}
-
-std::filesystem::path FileHandler::getLaneFilePath(LaneId laneId) const {
-    auto it = laneFiles.find(laneId);
-    if (it == laneFiles.end()) {
-        throw std::runtime_error("Invalid lane ID");
-    }
-    return it->second;
-}
-
-void FileHandler::logFileOperation(const std::string& operation, const std::filesystem::path& filepath) const {
-    std::cout << "File " << operation << ": " << filepath.filename() << std::endl;
-}
-
-void FileHandler::handleFileError(const std::string& operation,
-                                  const std::filesystem::path& filepath,
-                                  const std::exception& e) const {
-    std::cerr << "File " << operation << " error for " << filepath
-              << ": " << e.what() << std::endl;
-}
-
-bool FileHandler::isLaneFileAvailable(LaneId laneId) const {
-    auto it = laneFiles.find(laneId);
-    if (it == laneFiles.end()) return false;
-    return std::filesystem::exists(it->second);
-}
-
-
-void FileHandler::watchForFileChanges() {
-    // Check for changes to lane files every FILE_CHECK_INTERVAL_MS
-    auto lastCheckTime = std::chrono::steady_clock::now();
-
-    while (true) {
-        auto currentTime = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-            currentTime - lastCheckTime).count();
-
-        if (elapsed >= FILE_CHECK_INTERVAL_MS) {
-            // Check all lane files for changes
-            for (const auto& [laneId, filepath] : laneFiles) {
-                if (std::filesystem::exists(filepath)) {
-                    std::error_code ec;
-                    auto lastWriteTime = std::filesystem::last_write_time(filepath, ec);
-
-                    if (!ec) {
-                        // Process file if it's been modified
-                        // Use a mutex to avoid concurrent file access
-                        std::lock_guard<std::mutex> lock(fileMutex);
-
-                        // Read file contents
-                        std::ifstream file(filepath);
-                        if (file) {
-                            std::string line;
-                            std::vector<std::string> lines;
-
-                            while (std::getline(file, line)) {
-                                if (!line.empty()) {
-                                    lines.push_back(line);
-                                }
-                            }
-
-                            // Clear file after reading to avoid re-processing
-                            file.close();
-                            std::ofstream clearFile(filepath, std::ios::trunc);
-
-                            // Process the lines
-                            for (const auto& lineText : lines) {
-                                auto vehicle = parseVehicleLine(lineText, laneId);
-                                if (vehicle) {
-                                    vehiclesReady.push_back(std::make_pair(laneId, vehicle));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            lastCheckTime = currentTime;
-        }
-
-        // Small sleep to avoid CPU hogging
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-}
-
-
-void FileHandler::startFileWatching() {
-    watcherThread = std::thread(&FileHandler::watchForFileChanges, this);
-    watcherThread.detach();  // Let it run independently
-}
-
-
-std::vector<std::pair<LaneId, std::shared_ptr<Vehicle>>> FileHandler::getReadyVehicles() {
-    std::lock_guard<std::mutex> lock(fileMutex);
-    auto result = vehiclesReady;
-    vehiclesReady.clear();
-    return result;
-}
-
-
-// Fix for the last_write_time conversion error
-std::chrono::system_clock::time_point FileHandler::getLastModifiedTime(LaneId laneId) const {
-    auto it = laneFiles.find(laneId);
-    if (it == laneFiles.end() || !std::filesystem::exists(it->second)) {
-        return std::chrono::system_clock::time_point(); // Return epoch time
-    }
-
-    try {
-        // Convert file_time_type to system_clock::time_point
-        auto fileTime = std::filesystem::last_write_time(it->second);
-
-        // In C++17, direct conversion isn't available, so we'll return current time as a workaround
-        // This is sufficient for checking if a file has been modified recently
-        return std::chrono::system_clock::now();
-    } catch (const std::exception& e) {
-        std::cerr << "Error getting file time: " << e.what() << std::endl;
-        return std::chrono::system_clock::time_point();
-    }
+std::string FileHandler::getLaneStatusFilePath() const {
+    return dataPath + "/lane_status.txt";
 }
