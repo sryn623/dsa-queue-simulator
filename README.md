@@ -1,4 +1,4 @@
-# TRAFFIC JUNCTION SIMULATOR
+# SMART TRAFFIC FLOW SIMULATOR 
 
 🚦 **An Intelligent, Queue-Based Solution for Optimized Traffic Flow** 🚦
 
