@@ -151,7 +151,7 @@ dsa-queue-simulator/
 ## Contribute & Explore
 🚦 **Experience Intelligent Traffic Flow Like Never Before!** 🚦
 
-🔗 [GitHub Repository](https://github.com/sarbeshkc/dsa-queue-simulator)
+🔗 [GitHub Repository](https://github.com/sryn623/dsa-queue-simulator)
 
 🎯 *Optimize urban mobility with the power of data structures!*
 
