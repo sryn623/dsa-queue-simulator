@@ -212,648 +212,812 @@ bool TrafficLight::isGreen(char lane) const {
 }
 
 void TrafficLight::render(SDL_Renderer* renderer) {
-    // Draw traffic light control box in the corner
-    int boxX = 10;
-    int boxY = 10;
-    int boxWidth = 120;
-    int boxHeight = 140;
+    // Render modern holographic-style traffic light control system
 
-    // Draw main control box with 3D effect
-    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255); // Dark gray
-    SDL_FRect controlBox = {
-        static_cast<float>(boxX),
-        static_cast<float>(boxY),
-        static_cast<float>(boxWidth),
-        static_cast<float>(boxHeight)
+    // Constants for positioning
+    const int WINDOW_WIDTH = 800;
+    const int WINDOW_HEIGHT = 800;
+    const int CENTER_X = WINDOW_WIDTH / 2;
+    const int CENTER_Y = WINDOW_HEIGHT / 2;
+
+    // Draw main traffic control center in top-right corner
+    drawTrafficControlCenter(renderer);
+
+    // Draw junction lights (one at each road)
+    drawJunctionLight(renderer, CENTER_X, CENTER_Y - 100, 'A', isGreen('A')); // North (A) light
+    drawJunctionLight(renderer, CENTER_X + 100, CENTER_Y, 'B', isGreen('B')); // East (B) light
+    drawJunctionLight(renderer, CENTER_X, CENTER_Y + 100, 'C', isGreen('C')); // South (C) light
+    drawJunctionLight(renderer, CENTER_X - 100, CENTER_Y, 'D', isGreen('D')); // West (D) light
+
+    // Draw the state transition timer
+    drawStateTimer(renderer);
+}
+
+void TrafficLight::drawTrafficControlCenter(SDL_Renderer* renderer) {
+    // Draw holographic traffic management system display in top-right corner
+    const int PANEL_WIDTH = 160;
+    const int PANEL_HEIGHT = 160;
+    const int PANEL_X = 800 - PANEL_WIDTH - 20;
+    const int PANEL_Y = 20;
+
+    // Draw glass-style panel with dark blue semi-transparent background
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    // Panel main background
+    SDL_SetRenderDrawColor(renderer, 10, 20, 40, 180);
+    SDL_FRect panel = {
+        static_cast<float>(PANEL_X),
+        static_cast<float>(PANEL_Y),
+        static_cast<float>(PANEL_WIDTH),
+        static_cast<float>(PANEL_HEIGHT)
     };
-    SDL_RenderFillRect(renderer, &controlBox);
+    SDL_RenderFillRect(renderer, &panel);
 
-    // Top highlight
-    SDL_SetRenderDrawColor(renderer, 150, 150, 150, 255); // Light gray
-    SDL_FRect topHighlight = {
-        static_cast<float>(boxX),
-        static_cast<float>(boxY),
-        static_cast<float>(boxWidth),
-        4.0f
+    // Panel outer glow effect
+    for (int i = 1; i <= 3; i++) {
+        SDL_SetRenderDrawColor(renderer, 100, 140, 200, 40 / i);
+        SDL_FRect glow = {
+            panel.x - i, panel.y - i,
+            panel.w + i*2, panel.h + i*2
+        };
+        SDL_RenderRect(renderer, &glow);
+    }
+
+    // Panel border
+    SDL_SetRenderDrawColor(renderer, 100, 140, 200, 255);
+    SDL_RenderRect(renderer, &panel);
+
+    // Panel top header
+    SDL_SetRenderDrawColor(renderer, 40, 60, 100, 200);
+    SDL_FRect header = {
+        panel.x, panel.y,
+        panel.w, 25.0f
     };
-    SDL_RenderFillRect(renderer, &topHighlight);
+    SDL_RenderFillRect(renderer, &header);
 
-    // Left highlight
-    SDL_FRect leftHighlight = {
-        static_cast<float>(boxX),
-        static_cast<float>(boxY),
-        4.0f,
-        static_cast<float>(boxHeight)
+    // Draw "TRAFFIC CONTROL" title
+    SDL_SetRenderDrawColor(renderer, 220, 230, 255, 255);
+    drawPanelText(renderer, "TRAFFIC CONTROL", PANEL_X + PANEL_WIDTH/2 - 55, PANEL_Y + 8);
+
+    // Inner panel for light status
+    SDL_SetRenderDrawColor(renderer, 20, 30, 50, 200);
+    SDL_FRect innerPanel = {
+        panel.x + 8, panel.y + 35,
+        panel.w - 16, panel.h - 45
     };
-    SDL_RenderFillRect(renderer, &leftHighlight);
+    SDL_RenderFillRect(renderer, &innerPanel);
 
-    // Bottom shadow
-    SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255); // Very dark gray
-    SDL_FRect bottomShadow = {
-        static_cast<float>(boxX),
-        static_cast<float>(boxY + boxHeight - 4),
-        static_cast<float>(boxWidth),
-        4.0f
-    };
-    SDL_RenderFillRect(renderer, &bottomShadow);
+    // Inner panel border
+    SDL_SetRenderDrawColor(renderer, 80, 100, 160, 150);
+    SDL_RenderRect(renderer, &innerPanel);
 
-    // Right shadow
-    SDL_FRect rightShadow = {
-        static_cast<float>(boxX + boxWidth - 4),
-        static_cast<float>(boxY),
-        4.0f,
-        static_cast<float>(boxHeight)
-    };
-    SDL_RenderFillRect(renderer, &rightShadow);
+    // Draw road light indicators
+    const int LIGHT_SIZE = 18;
+    const int LIGHT_SPACING = 30;
+    const int START_Y = PANEL_Y + 45;
 
-    // Title bar
-    SDL_SetRenderDrawColor(renderer, 50, 50, 150, 255); // Dark blue
-    SDL_FRect titleBar = {
-        static_cast<float>(boxX + 5),
-        static_cast<float>(boxY + 5),
-        static_cast<float>(boxWidth - 10),
-        20.0f
-    };
-    SDL_RenderFillRect(renderer, &titleBar);
+    // Road labels
+    const char* roads[] = {"ROAD A", "ROAD B", "ROAD C", "ROAD D"};
 
-    // Title text using simplified drawing (T L)
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255); // White
-    // Draw "T"
-    SDL_RenderLine(renderer, boxX + 20, boxY + 10, boxX + 35, boxY + 10);
-    SDL_RenderLine(renderer, boxX + 27, boxY + 10, boxX + 27, boxY + 20);
-    // Draw "L"
-    SDL_RenderLine(renderer, boxX + 40, boxY + 10, boxX + 40, boxY + 20);
-    SDL_RenderLine(renderer, boxX + 40, boxY + 20, boxX + 55, boxY + 20);
+    for (int i = 0; i < 4; i++) {
+        int y = START_Y + i * LIGHT_SPACING;
 
-    // Draw light status indicators for each road
-    const int LIGHT_SIZE = 20;
-    const int LABEL_HEIGHT = 20;
-    const int SPACING = 5;
-    int startY = boxY + 30;
+        // Draw road label
+        SDL_SetRenderDrawColor(renderer, 180, 200, 255, 255);
+        drawPanelText(renderer, roads[i], PANEL_X + 15, y);
 
-    // Road A light
-    bool isARed = !isGreen('A');
-    drawRoadLightIndicator(renderer, boxX + 10, startY, LIGHT_SIZE, LABEL_HEIGHT, 'A', isARed);
+        // Determine light color based on state
+        bool isRoad = false;
+        switch (i) {
+            case 0: isRoad = isGreen('A'); break;
+            case 1: isRoad = isGreen('B'); break;
+            case 2: isRoad = isGreen('C'); break;
+            case 3: isRoad = isGreen('D'); break;
+        }
 
-    // Road B light
-    bool isBRed = !isGreen('B');
-    drawRoadLightIndicator(renderer, boxX + 10, startY + LIGHT_SIZE + LABEL_HEIGHT + SPACING,
-                          LIGHT_SIZE, LABEL_HEIGHT, 'B', isBRed);
-
-    // Road C light
-    bool isCRed = !isGreen('C');
-    drawRoadLightIndicator(renderer, boxX + 10, startY + 2 * (LIGHT_SIZE + LABEL_HEIGHT + SPACING),
-                          LIGHT_SIZE, LABEL_HEIGHT, 'C', isCRed);
-
-    // Road D light
-    bool isDRed = !isGreen('D');
-    drawRoadLightIndicator(renderer, boxX + 10, startY + 3 * (LIGHT_SIZE + LABEL_HEIGHT + SPACING),
-                          LIGHT_SIZE, LABEL_HEIGHT, 'D', isDRed);
+        // Draw holographic light indicator
+        drawHolographicLight(renderer, PANEL_X + PANEL_WIDTH - 30, y, LIGHT_SIZE, isRoad);
+    }
 
     // Draw priority mode indicator if active
     if (isPriorityMode) {
-        // Flash the indicator
+        // Flashing priority alert
         uint32_t time = SDL_GetTicks();
         bool flash = (time / 500) % 2 == 0;
 
-        SDL_SetRenderDrawColor(renderer, flash ? 255 : 200, flash ? 140 : 100, 0, 255);
-
+        SDL_SetRenderDrawColor(renderer, flash ? 255 : 200, flash ? 140 : 100, 0, 200);
         SDL_FRect priorityBox = {
-            static_cast<float>(boxX + boxWidth + 10),
-            static_cast<float>(boxY),
-            50.0f,
-            50.0f
+            panel.x + 10, panel.y + panel.h - 30,
+            panel.w - 20, 20.0f
         };
         SDL_RenderFillRect(renderer, &priorityBox);
 
-        // Draw "P" for priority
+        // Priority text
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-        // Vertical line
-        SDL_RenderLine(renderer, boxX + boxWidth + 25, boxY + 10, boxX + boxWidth + 25, boxY + 40);
-        // Curved top
-        SDL_RenderLine(renderer, boxX + boxWidth + 25, boxY + 10, boxX + boxWidth + 45, boxY + 10);
-        SDL_RenderLine(renderer, boxX + boxWidth + 45, boxY + 10, boxX + boxWidth + 45, boxY + 25);
-        SDL_RenderLine(renderer, boxX + boxWidth + 45, boxY + 25, boxX + boxWidth + 25, boxY + 25);
-
-        // Draw A2 indicator
-        SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
-        SDL_RenderLine(renderer, boxX + boxWidth + 30, boxY + 30, boxX + boxWidth + 40, boxY + 30);
-        SDL_RenderLine(renderer, boxX + boxWidth + 35, boxY + 30, boxX + boxWidth + 35, boxY + 40);
+        drawPanelText(renderer, "PRIORITY MODE: A2", PANEL_X + 20, PANEL_Y + PANEL_HEIGHT - 25);
     }
 
-    // Draw the individual traffic lights at road positions
-    drawLightForA(renderer, !isGreen('A'));
-    drawLightForB(renderer, !isGreen('B'));
-    drawLightForC(renderer, !isGreen('C'));
-    drawLightForD(renderer, !isGreen('D'));
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-void TrafficLight::drawRoadLightIndicator(SDL_Renderer* renderer, int x, int y,
-                                         int lightSize, int labelHeight,
-                                         char roadId, bool isRed) {
-    // Draw label background
-    SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
-    SDL_FRect labelBox = {
-        static_cast<float>(x),
-        static_cast<float>(y),
-        static_cast<float>(lightSize * 2 + 10),
-        static_cast<float>(labelHeight)
-    };
-    SDL_RenderFillRect(renderer, &labelBox);
+void TrafficLight::drawJunctionLight(SDL_Renderer* renderer, int x, int y, char roadId, bool isGreen) {
+    // Draw futuristic traffic light on the roads
+    const int LIGHT_WIDTH = 30;
+    const int LIGHT_HEIGHT = 50;
 
-    // Draw road identifier letter
-    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    // Adjust position based on road
+    float posX = x;
+    float posY = y;
+
+    // Adjust for road position
     switch (roadId) {
-        case 'A':
-            // Draw "A"
-            SDL_RenderLine(renderer, x + 5, y + labelHeight - 5, x + 10, y + 5);
-            SDL_RenderLine(renderer, x + 10, y + 5, x + 15, y + labelHeight - 5);
-            SDL_RenderLine(renderer, x + 7, y + labelHeight/2, x + 13, y + labelHeight/2);
+        case 'A': // North
+            posX -= LIGHT_WIDTH / 2;
+            posY -= LIGHT_HEIGHT + 20;
             break;
-        case 'B':
-            // Draw "B"
-            SDL_RenderLine(renderer, x + 5, y + 5, x + 5, y + labelHeight - 5);
-            SDL_RenderLine(renderer, x + 5, y + 5, x + 12, y + 5);
-            SDL_RenderLine(renderer, x + 12, y + 5, x + 15, y + 8);
-            SDL_RenderLine(renderer, x + 15, y + 8, x + 12, y + labelHeight/2);
-            SDL_RenderLine(renderer, x + 12, y + labelHeight/2, x + 5, y + labelHeight/2);
-            SDL_RenderLine(renderer, x + 5, y + labelHeight/2, x + 12, y + labelHeight/2);
-            SDL_RenderLine(renderer, x + 12, y + labelHeight/2, x + 15, y + labelHeight - 8);
-            SDL_RenderLine(renderer, x + 15, y + labelHeight - 8, x + 12, y + labelHeight - 5);
-            SDL_RenderLine(renderer, x + 12, y + labelHeight - 5, x + 5, y + labelHeight - 5);
+        case 'B': // East
+            posX += 20;
+            posY -= LIGHT_HEIGHT / 2;
             break;
-        case 'C':
-            // Draw "C"
-            SDL_RenderLine(renderer, x + 15, y + 5, x + 5, y + 5);
-            SDL_RenderLine(renderer, x + 5, y + 5, x + 5, y + labelHeight - 5);
-            SDL_RenderLine(renderer, x + 5, y + labelHeight - 5, x + 15, y + labelHeight - 5);
+        case 'C': // South
+            posX -= LIGHT_WIDTH / 2;
+            posY += 20;
             break;
-        case 'D':
-            // Draw "D"
-            SDL_RenderLine(renderer, x + 5, y + 5, x + 5, y + labelHeight - 5);
-            SDL_RenderLine(renderer, x + 5, y + 5, x + 10, y + 5);
-            SDL_RenderLine(renderer, x + 10, y + 5, x + 15, y + labelHeight/2);
-            SDL_RenderLine(renderer, x + 15, y + labelHeight/2, x + 10, y + labelHeight - 5);
-            SDL_RenderLine(renderer, x + 10, y + labelHeight - 5, x + 5, y + labelHeight - 5);
+        case 'D': // West
+            posX -= LIGHT_WIDTH + 20;
+            posY -= LIGHT_HEIGHT / 2;
             break;
     }
 
-    // Draw red light
-    SDL_SetRenderDrawColor(renderer, isRed ? 255 : 60, 0, 0, 255);
-    SDL_FRect redLight = {
-        static_cast<float>(x + 25),
-        static_cast<float>(y + labelHeight + 5),
-        static_cast<float>(lightSize),
-        static_cast<float>(lightSize)
+    // Draw light housing
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+    // Light housing (dark)
+    SDL_SetRenderDrawColor(renderer, 40, 40, 50, 220);
+    SDL_FRect housing = {
+        posX, posY,
+        static_cast<float>(LIGHT_WIDTH),
+        static_cast<float>(LIGHT_HEIGHT)
     };
-    SDL_RenderFillRect(renderer, &redLight);
+    SDL_RenderFillRect(renderer, &housing);
 
-    // Add 3D effect to red light
-    if (isRed) {
-        // Light glow when active
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 255, 100, 100, 100);
-        SDL_FRect redGlow = {
-            redLight.x - 5.0f,
-            redLight.y - 5.0f,
-            redLight.w + 10.0f,
-            redLight.h + 10.0f
-        };
-        SDL_RenderFillRect(renderer, &redGlow);
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    // Housing border
+    SDL_SetRenderDrawColor(renderer, 80, 80, 100, 255);
+    SDL_RenderRect(renderer, &housing);
 
-        // Highlight (top-left edge)
-        SDL_SetRenderDrawColor(renderer, 255, 150, 150, 255);
-        SDL_FRect redHighlight = {
-            redLight.x,
-            redLight.y,
-            redLight.w/3,
-            redLight.h/3
-        };
-        SDL_RenderFillRect(renderer, &redHighlight);
-    }
+    // Light lens
+    float lensSize = 20.0f;
+    float lensX = posX + (LIGHT_WIDTH - lensSize) / 2;
+    float lensY = posY + (LIGHT_HEIGHT - lensSize) / 2;
 
-    // Draw green light
-    SDL_SetRenderDrawColor(renderer, 0, isRed ? 60 : 255, 0, 255);
-    SDL_FRect greenLight = {
-        static_cast<float>(x + 50),
-        static_cast<float>(y + labelHeight + 5),
-        static_cast<float>(lightSize),
-        static_cast<float>(lightSize)
+    // Draw lens background
+    SDL_SetRenderDrawColor(renderer, 30, 30, 35, 255);
+    SDL_FRect lens = {
+        lensX, lensY,
+        lensSize, lensSize
     };
-    SDL_RenderFillRect(renderer, &greenLight);
+    SDL_RenderFillRect(renderer, &lens);
 
-    // Add 3D effect to green light
-    if (!isRed) {
-        // Light glow when active
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, 100, 255, 100, 100);
-        SDL_FRect greenGlow = {
-            greenLight.x - 5.0f,
-            greenLight.y - 5.0f,
-            greenLight.w + 10.0f,
-            greenLight.h + 10.0f
+    // Draw active light (red or green)
+    if (isGreen) {
+        // Green with glow effect
+        // Inner bright glow
+        SDL_SetRenderDrawColor(renderer, 100, 255, 100, 255);
+        SDL_FRect greenLight = {
+            lensX + 2, lensY + 2,
+            lensSize - 4, lensSize - 4
         };
-        SDL_RenderFillRect(renderer, &greenGlow);
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        SDL_RenderFillRect(renderer, &greenLight);
 
-        // Highlight (top-left edge)
-        SDL_SetRenderDrawColor(renderer, 150, 255, 150, 255);
+        // Add inner highlight
+        SDL_SetRenderDrawColor(renderer, 180, 255, 180, 200);
         SDL_FRect greenHighlight = {
-            greenLight.x,
-            greenLight.y,
-            greenLight.w/3,
-            greenLight.h/3
+            lensX + 4, lensY + 4,
+            lensSize/2, lensSize/2
         };
         SDL_RenderFillRect(renderer, &greenHighlight);
+
+        // Outer glow
+        for (int i = 1; i <= 5; i++) {
+            SDL_SetRenderDrawColor(renderer, 100, 255, 100, 200 / i);
+            SDL_FRect greenGlow = {
+                lensX - i, lensY - i,
+                lensSize + i*2, lensSize + i*2
+            };
+            SDL_RenderRect(renderer, &greenGlow);
+        }
+    } else {
+        // Red with glow effect
+        // Inner bright glow
+        SDL_SetRenderDrawColor(renderer, 255, 50, 50, 255);
+        SDL_FRect redLight = {
+            lensX + 2, lensY + 2,
+            lensSize - 4, lensSize - 4
+        };
+        SDL_RenderFillRect(renderer, &redLight);
+
+        // Add inner highlight
+        SDL_SetRenderDrawColor(renderer, 255, 150, 150, 200);
+        SDL_FRect redHighlight = {
+            lensX + 4, lensY + 4,
+            lensSize/2, lensSize/2
+        };
+        SDL_RenderFillRect(renderer, &redHighlight);
+
+        // Outer glow
+        for (int i = 1; i <= 5; i++) {
+            SDL_SetRenderDrawColor(renderer, 255, 50, 50, 200 / i);
+            SDL_FRect redGlow = {
+                lensX - i, lensY - i,
+                lensSize + i*2, lensSize + i*2
+            };
+            SDL_RenderRect(renderer, &redGlow);
+        }
     }
 
-    // Draw light outlines
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &redLight);
-    SDL_RenderRect(renderer, &greenLight);
+    // Draw lens border
+    SDL_SetRenderDrawColor(renderer, 100, 100, 120, 255);
+    SDL_RenderRect(renderer, &lens);
+
+    // Draw road identifier
+    SDL_SetRenderDrawColor(renderer, 200, 220, 255, 255);
+    char roadChar[2] = {roadId, '\0'};
+
+    // Position depends on road
+    float textX, textY;
+    switch (roadId) {
+        case 'A': // North
+            textX = posX + LIGHT_WIDTH / 2 - 4;
+            textY = posY + 5;
+            break;
+        case 'B': // East
+            textX = posX + 5;
+            textY = posY + 5;
+            break;
+        case 'C': // South
+            textX = posX + LIGHT_WIDTH / 2 - 4;
+            textY = posY + 5;
+            break;
+        case 'D': // West
+            textX = posX + LIGHT_WIDTH - 10;
+            textY = posY + 5;
+            break;
+    }
+
+    drawPanelText(renderer, roadChar, textX, textY);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-void TrafficLight::drawLightForA(SDL_Renderer* renderer, bool isRed) {
-    const int LIGHT_SIZE = 20;
-    const int LIGHT_BOX_WIDTH = 40;
-    const int LIGHT_BOX_HEIGHT = 80;
-    const int WINDOW_WIDTH = 800;
-    const int WINDOW_HEIGHT = 800;
-    const int ARROW_SIZE = 10;
+void TrafficLight::drawStateTimer(SDL_Renderer* renderer) {
+    // Draw a timer showing state progression with animation
+    uint32_t currentTime = SDL_GetTicks();
+    uint32_t elapsedTime = currentTime - lastStateChangeTime;
 
-    // Position for road A - move slightly for better visibility
-    int x = WINDOW_WIDTH/2 + 40;
-    int y = WINDOW_HEIGHT/2 - 120;
-
-    // Enhanced traffic light box with 3D effect
-    // Shadow
-    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-    SDL_FRect shadowBox = {(float)x + 3, (float)y + 3, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &shadowBox);
-
-    // Main box (dark gray)
-    SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
-    SDL_FRect lightBox = {(float)x, (float)y, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &lightBox);
-
-    // Highlight edge
-    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
-    SDL_FRect highlight = {(float)x, (float)y, LIGHT_BOX_WIDTH, 2.0f};
-    SDL_RenderFillRect(renderer, &highlight);
-    SDL_FRect highlightSide = {(float)x, (float)y, 2.0f, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &highlightSide);
-
-    // Black border
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &lightBox);
-
-    // Red light with glow effect
-    if (isRed) {
-        // Glow
-        SDL_SetRenderDrawColor(renderer, 150, 0, 0, 100);
-        SDL_FRect redGlow = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2 - 3), (float)(y + 10 - 3),
-                             LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &redGlow);
+    // Calculate state duration
+    int stateDuration;
+    if (currentState == State::ALL_RED) {
+        stateDuration = allRedDuration;
+    } else if (isPriorityMode && currentState == State::A_GREEN) {
+        stateDuration = 6000; // 6 seconds in priority mode
+    } else {
+        float avgVehicleCount = 5.0f; // Default fallback
+        stateDuration = static_cast<int>(avgVehicleCount * 2000);
+        stateDuration = std::max(3000, std::min(stateDuration, 15000));
     }
 
-    SDL_SetRenderDrawColor(renderer, isRed ? 255 : 50, 0, 0, 255);
-    SDL_FRect redLight = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2), (float)(y + 10),
-                         LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &redLight);
+    // Calculate progress (0.0 to 1.0)
+    float progress = static_cast<float>(elapsedTime) / static_cast<float>(stateDuration);
+    progress = std::min(1.0f, progress);
 
-    // Green light with glow effect
-    if (!isRed) {
-        // Glow
-        SDL_SetRenderDrawColor(renderer, 0, 150, 0, 100);
-        SDL_FRect greenGlow = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2 - 3), (float)(y + 40 - 3),
-                              LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &greenGlow);
+    // Draw progress arc in the control panel
+    const int CENTER_X = 800 - 100;
+    const int CENTER_Y = 100;
+    const int RADIUS = 30;
+
+    // Draw background circle
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 30, 40, 60, 200);
+
+    for (int i = 0; i < 360; i += 5) {
+        float radian = i * M_PI / 180.0f;
+        SDL_RenderLine(renderer,
+                      CENTER_X, CENTER_Y,
+                      CENTER_X + RADIUS * cosf(radian),
+                      CENTER_Y + RADIUS * sinf(radian));
     }
 
-    SDL_SetRenderDrawColor(renderer, 0, isRed ? 50 : 255, 0, 255);
-    SDL_FRect greenLight = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2), (float)(y + 40),
-                           LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &greenLight);
+    // Draw progress arc
+    int progressDegrees = static_cast<int>(progress * 360);
 
-    // Add straight arrow for green light
-    if (!isRed) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-
-        // Draw arrow shape
-        SDL_FRect arrowStem = {(float)(x + LIGHT_BOX_WIDTH/2 - 2), (float)(y + 50 - ARROW_SIZE/2),
-                              4.0f, (float)ARROW_SIZE};
-        SDL_RenderFillRect(renderer, &arrowStem);
-
-        // Arrow head (triangle)
-        SDL_Vertex vertices[3];
-        SDL_FColor white = {1.0f, 1.0f, 1.0f, 1.0f};
-
-        vertices[0].position.x = x + LIGHT_BOX_WIDTH/2;
-        vertices[0].position.y = y + 50 - ARROW_SIZE/2 - 5;
-        vertices[0].color = white;
-
-        vertices[1].position.x = x + LIGHT_BOX_WIDTH/2 - 5;
-        vertices[1].position.y = y + 50 - ARROW_SIZE/2;
-        vertices[1].color = white;
-
-        vertices[2].position.x = x + LIGHT_BOX_WIDTH/2 + 5;
-        vertices[2].position.y = y + 50 - ARROW_SIZE/2;
-        vertices[2].color = white;
-
-        SDL_RenderGeometry(renderer, NULL, vertices, 3, NULL, 0);
+    // Choose color based on state
+    SDL_Color arcColor;
+    switch (currentState) {
+        case State::ALL_RED:
+            arcColor = {255, 100, 100, 255}; // Red
+            break;
+        case State::A_GREEN:
+            arcColor = isPriorityMode ? SDL_Color{255, 180, 0, 255} : SDL_Color{100, 255, 100, 255};
+            break;
+        default:
+            arcColor = {100, 255, 100, 255}; // Green
+            break;
     }
 
-    // Black borders around lights
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &redLight);
-    SDL_RenderRect(renderer, &greenLight);
+    // Draw the arc segments
+    SDL_SetRenderDrawColor(renderer, arcColor.r, arcColor.g, arcColor.b, arcColor.a);
+
+    for (int i = 0; i < progressDegrees; i += 2) {
+        float radian = i * M_PI / 180.0f;
+        SDL_RenderLine(renderer,
+                      CENTER_X, CENTER_Y,
+                      CENTER_X + RADIUS * cosf(radian),
+                      CENTER_Y + RADIUS * sinf(radian));
+    }
+
+    // Draw a clock hand for visual effect
+    float handRadian = progressDegrees * M_PI / 180.0f;
+    SDL_RenderLine(renderer,
+                  CENTER_X, CENTER_Y,
+                  CENTER_X + (RADIUS-5) * cosf(handRadian),
+                  CENTER_Y + (RADIUS-5) * sinf(handRadian));
+
+    // Draw time remaining text
+    int secondsRemaining = (stateDuration - elapsedTime) / 1000 + 1;
+    std::string timeStr = std::to_string(secondsRemaining) + "s";
+
+    SDL_SetRenderDrawColor(renderer, 220, 230, 255, 255);
+    drawPanelText(renderer, timeStr.c_str(), CENTER_X - 8, CENTER_Y - 5);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-void TrafficLight::drawLightForB(SDL_Renderer* renderer, bool isRed) {
-    const int LIGHT_SIZE = 20;
-    const int LIGHT_BOX_WIDTH = 80;
-    const int LIGHT_BOX_HEIGHT = 40;
-    const int WINDOW_WIDTH = 800;
-    const int WINDOW_HEIGHT = 800;
-    const int ARROW_SIZE = 10;
+void TrafficLight::drawHolographicLight(SDL_Renderer* renderer, int x, int y, int size, bool isActive) {
+    // Draw a holographic light indicator
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    // Position for road B
-    int x = WINDOW_WIDTH/2 - 60;
-    int y = WINDOW_HEIGHT/2 + 40;
+    // Flickering effect for hologram
+    uint32_t time = SDL_GetTicks();
+    float flicker = 0.8f + 0.2f * sin(time * 0.01f);
 
-    // Enhanced traffic light box with 3D effect
-    // Shadow
-    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-    SDL_FRect shadowBox = {(float)x + 3, (float)y + 3, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &shadowBox);
+    // Background
+    SDL_SetRenderDrawColor(renderer, 30, 40, 60, 200);
+    SDL_FRect lightBg = {
+        static_cast<float>(x - size/2),
+        static_cast<float>(y - size/2),
+        static_cast<float>(size),
+        static_cast<float>(size)
+    };
+    SDL_RenderFillRect(renderer, &lightBg);
 
-    // Main box (dark gray)
-    SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
-    SDL_FRect lightBox = {(float)x, (float)y, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &lightBox);
+    // Light state
+    if (isActive) {
+        // Active green light
+        SDL_SetRenderDrawColor(renderer,
+                               static_cast<Uint8>(100 * flicker),
+                               static_cast<Uint8>(255 * flicker),
+                               static_cast<Uint8>(100 * flicker),
+                               200);
 
-    // Highlight edge
-    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
-    SDL_FRect highlight = {(float)x, (float)y, LIGHT_BOX_WIDTH, 2.0f};
-    SDL_RenderFillRect(renderer, &highlight);
-    SDL_FRect highlightSide = {(float)x, (float)y, 2.0f, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &highlightSide);
+        // Inner light
+        SDL_FRect innerLight = {
+            lightBg.x + 2, lightBg.y + 2,
+            lightBg.w - 4, lightBg.h - 4
+        };
+        SDL_RenderFillRect(renderer, &innerLight);
 
-    // Black border
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &lightBox);
-
-    // Red light with glow effect
-    if (isRed) {
         // Glow
-        SDL_SetRenderDrawColor(renderer, 150, 0, 0, 100);
-        SDL_FRect redGlow = {(float)(x + 10 - 3), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2 - 3),
-                            LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &redGlow);
-    }
+        for (int i = 1; i <= 3; i++) {
+            SDL_SetRenderDrawColor(renderer, 100, 255, 100, static_cast<Uint8>(100/i * flicker));
+            SDL_FRect glow = {
+                lightBg.x - i, lightBg.y - i,
+                lightBg.w + i*2, lightBg.h + i*2
+            };
+            SDL_RenderRect(renderer, &glow);
+        }
+    } else {
+        // Inactive red light
+        SDL_SetRenderDrawColor(renderer,
+                               static_cast<Uint8>(255 * flicker),
+                               static_cast<Uint8>(80 * flicker),
+                               static_cast<Uint8>(80 * flicker),
+                               200);
 
-    SDL_SetRenderDrawColor(renderer, isRed ? 255 : 50, 0, 0, 255);
-    SDL_FRect redLight = {(float)(x + 10), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2),
-                         LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &redLight);
+        // Inner light
+        SDL_FRect innerLight = {
+            lightBg.x + 2, lightBg.y + 2,
+            lightBg.w - 4, lightBg.h - 4
+        };
+        SDL_RenderFillRect(renderer, &innerLight);
 
-    // Green light with glow effect
-    if (!isRed) {
         // Glow
-        SDL_SetRenderDrawColor(renderer, 0, 150, 0, 100);
-        SDL_FRect greenGlow = {(float)(x + 40 - 3), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2 - 3),
-                              LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &greenGlow);
+        for (int i = 1; i <= 3; i++) {
+            SDL_SetRenderDrawColor(renderer, 255, 80, 80, static_cast<Uint8>(100/i * flicker));
+            SDL_FRect glow = {
+                lightBg.x - i, lightBg.y - i,
+                lightBg.w + i*2, lightBg.h + i*2
+            };
+            SDL_RenderRect(renderer, &glow);
+        }
     }
 
-    SDL_SetRenderDrawColor(renderer, 0, isRed ? 50 : 255, 0, 255);
-    SDL_FRect greenLight = {(float)(x + 40), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2),
-                           LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &greenLight);
+    // Border
+    SDL_SetRenderDrawColor(renderer, 100, 140, 200, 255);
+    SDL_RenderRect(renderer, &lightBg);
 
-    // Add straight arrow for green light
-    if (!isRed) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-
-        // Draw arrow shape (horizontal)
-        SDL_FRect arrowStem = {(float)(x + 50 - ARROW_SIZE/2), (float)(y + LIGHT_BOX_HEIGHT/2 - 2),
-                              (float)ARROW_SIZE, 4.0f};
-        SDL_RenderFillRect(renderer, &arrowStem);
-
-        // Arrow head (triangle)
-        SDL_Vertex vertices[3];
-        SDL_FColor white = {1.0f, 1.0f, 1.0f, 1.0f};
-
-        vertices[0].position.x = x + 50 - ARROW_SIZE/2 - 5;
-        vertices[0].position.y = y + LIGHT_BOX_HEIGHT/2;
-        vertices[0].color = white;
-
-        vertices[1].position.x = x + 50 - ARROW_SIZE/2;
-        vertices[1].position.y = y + LIGHT_BOX_HEIGHT/2 - 5;
-        vertices[1].color = white;
-
-        vertices[2].position.x = x + 50 - ARROW_SIZE/2;
-        vertices[2].position.y = y + LIGHT_BOX_HEIGHT/2 + 5;
-        vertices[2].color = white;
-
-        SDL_RenderGeometry(renderer, NULL, vertices, 3, NULL, 0);
-    }
-
-    // Black borders around lights
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &redLight);
-    SDL_RenderRect(renderer, &greenLight);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-void TrafficLight::drawLightForC(SDL_Renderer* renderer, bool isRed) {
-    const int LIGHT_SIZE = 20;
-    const int LIGHT_BOX_WIDTH = 40;
-    const int LIGHT_BOX_HEIGHT = 80;
-    const int WINDOW_WIDTH = 800;
-    const int WINDOW_HEIGHT = 800;
-    const int ARROW_SIZE = 10;
+void TrafficLight::drawPanelText(SDL_Renderer* renderer, const char* text, int x, int y) {
+    // Simplified text drawing for the panel
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-    // Position for road C - move slightly for better visibility
-    int x = WINDOW_WIDTH/2 - 80;
-    int y = WINDOW_HEIGHT/2 + 40;
-
-    // Enhanced traffic light box with 3D effect
-    // Shadow
-    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-    SDL_FRect shadowBox = {(float)x + 3, (float)y + 3, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &shadowBox);
-
-    // Main box (dark gray)
-    SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
-    SDL_FRect lightBox = {(float)x, (float)y, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &lightBox);
-
-    // Highlight edge
-    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
-    SDL_FRect highlight = {(float)x, (float)y, LIGHT_BOX_WIDTH, 2.0f};
-    SDL_RenderFillRect(renderer, &highlight);
-    SDL_FRect highlightSide = {(float)x, (float)y, 2.0f, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &highlightSide);
-
-    // Black border
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &lightBox);
-
-    // Red light with glow effect
-    if (isRed) {
-        // Glow
-        SDL_SetRenderDrawColor(renderer, 150, 0, 0, 100);
-        SDL_FRect redGlow = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2 - 3), (float)(y + 10 - 3),
-                             LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &redGlow);
+    // Draw characters
+    for (int i = 0; text[i] != '\0'; i++) {
+        drawPanelChar(renderer, text[i], x + i*8, y);
     }
 
-    SDL_SetRenderDrawColor(renderer, isRed ? 255 : 50, 0, 0, 255);
-    SDL_FRect redLight = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2), (float)(y + 10),
-                         LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &redLight);
-
-    // Green light with glow effect
-    if (!isRed) {
-        // Glow
-        SDL_SetRenderDrawColor(renderer, 0, 150, 0, 100);
-        SDL_FRect greenGlow = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2 - 3), (float)(y + 40 - 3),
-                              LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &greenGlow);
-    }
-
-    SDL_SetRenderDrawColor(renderer, 0, isRed ? 50 : 255, 0, 255);
-    SDL_FRect greenLight = {(float)(x + LIGHT_BOX_WIDTH/2 - LIGHT_SIZE/2), (float)(y + 40),
-                           LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &greenLight);
-
-    // Add straight arrow for green light (pointing upward)
-    if (!isRed) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-
-        // Draw arrow shape
-        SDL_FRect arrowStem = {(float)(x + LIGHT_BOX_WIDTH/2 - 2), (float)(y + 50 - ARROW_SIZE/2),
-                              4.0f, (float)ARROW_SIZE};
-        SDL_RenderFillRect(renderer, &arrowStem);
-
-        // Arrow head (triangle)
-        SDL_Vertex vertices[3];
-        SDL_FColor white = {1.0f, 1.0f, 1.0f, 1.0f};
-
-        vertices[0].position.x = x + LIGHT_BOX_WIDTH/2;
-        vertices[0].position.y = y + 50 - ARROW_SIZE/2 - 5;
-        vertices[0].color = white;
-
-        vertices[1].position.x = x + LIGHT_BOX_WIDTH/2 - 5;
-        vertices[1].position.y = y + 50 - ARROW_SIZE/2;
-        vertices[1].color = white;
-
-        vertices[2].position.x = x + LIGHT_BOX_WIDTH/2 + 5;
-        vertices[2].position.y = y + 50 - ARROW_SIZE/2;
-        vertices[2].color = white;
-
-        SDL_RenderGeometry(renderer, NULL, vertices, 3, NULL, 0);
-    }
-
-    // Black borders around lights
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &redLight);
-    SDL_RenderRect(renderer, &greenLight);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 }
 
-void TrafficLight::drawLightForD(SDL_Renderer* renderer, bool isRed) {
-    const int LIGHT_SIZE = 20;
-    const int LIGHT_BOX_WIDTH = 80;
-    const int LIGHT_BOX_HEIGHT = 40;
-    const int WINDOW_WIDTH = 800;
-    const int WINDOW_HEIGHT = 800;
-    const int ARROW_SIZE = 10;
-
-    // Position for road D
-    int x = WINDOW_WIDTH/2 - 120;
-    int y = WINDOW_HEIGHT/2 - 80;
-
-    // Enhanced traffic light box with 3D effect
-    // Shadow
-    SDL_SetRenderDrawColor(renderer, 30, 30, 30, 255);
-    SDL_FRect shadowBox = {(float)x + 3, (float)y + 3, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &shadowBox);
-
-    // Main box (dark gray)
-    SDL_SetRenderDrawColor(renderer, 70, 70, 70, 255);
-    SDL_FRect lightBox = {(float)x, (float)y, LIGHT_BOX_WIDTH, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &lightBox);
-
-    // Highlight edge
-    SDL_SetRenderDrawColor(renderer, 100, 100, 100, 255);
-    SDL_FRect highlight = {(float)x, (float)y, LIGHT_BOX_WIDTH, 2.0f};
-    SDL_RenderFillRect(renderer, &highlight);
-    SDL_FRect highlightSide = {(float)x, (float)y, 2.0f, LIGHT_BOX_HEIGHT};
-    SDL_RenderFillRect(renderer, &highlightSide);
-
-    // Black border
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &lightBox);
-
-    // Red light with glow effect
-    if (isRed) {
-        // Glow
-        SDL_SetRenderDrawColor(renderer, 150, 0, 0, 100);
-        SDL_FRect redGlow = {(float)(x + 10 - 3), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2 - 3),
-                            LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &redGlow);
+void TrafficLight::drawPanelChar(SDL_Renderer* renderer, char c, int x, int y) {
+    // Simplified monospaced character drawing
+    switch (c) {
+        case 'A':
+            SDL_RenderLine(renderer, x+3, y, x, y+9);      // Left diagonal
+            SDL_RenderLine(renderer, x+3, y, x+6, y+9);    // Right diagonal
+            SDL_RenderLine(renderer, x+1, y+6, x+5, y+6);  // Middle
+            break;
+        case 'B':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Left vertical
+            SDL_RenderLine(renderer, x, y, x+4, y);        // Top
+            SDL_RenderLine(renderer, x+4, y, x+5, y+2);    // Top curve
+            SDL_RenderLine(renderer, x+5, y+2, x+4, y+4);  // Middle top
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Middle
+            SDL_RenderLine(renderer, x+4, y+4, x+5, y+7);  // Middle bottom
+            SDL_RenderLine(renderer, x+5, y+7, x+4, y+9);  // Bottom curve
+            SDL_RenderLine(renderer, x+4, y+9, x, y+9);    // Bottom
+            break;
+        case 'C':
+            SDL_RenderLine(renderer, x+5, y+2, x+2, y);    // Top right
+            SDL_RenderLine(renderer, x+2, y, x, y+2);      // Top left
+            SDL_RenderLine(renderer, x, y+2, x, y+7);      // Left
+            SDL_RenderLine(renderer, x, y+7, x+2, y+9);    // Bottom left
+            SDL_RenderLine(renderer, x+2, y+9, x+5, y+7);  // Bottom right
+            break;
+        case 'D':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Left vertical
+            SDL_RenderLine(renderer, x, y, x+3, y);        // Top
+            SDL_RenderLine(renderer, x+3, y, x+5, y+2);    // Top right
+            SDL_RenderLine(renderer, x+5, y+2, x+5, y+7);  // Right
+            SDL_RenderLine(renderer, x+5, y+7, x+3, y+9);  // Bottom right
+            SDL_RenderLine(renderer, x+3, y+9, x, y+9);    // Bottom
+            break;
+        case 'E':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Vertical
+            SDL_RenderLine(renderer, x, y, x+5, y);        // Top
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Middle
+            SDL_RenderLine(renderer, x, y+9, x+5, y+9);    // Bottom
+            break;
+        case 'F':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Vertical
+            SDL_RenderLine(renderer, x, y, x+5, y);        // Top
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Middle
+            break;
+        case 'G':
+            SDL_RenderLine(renderer, x+5, y+2, x+2, y);    // Top right
+            SDL_RenderLine(renderer, x+2, y, x, y+2);      // Top left
+            SDL_RenderLine(renderer, x, y+2, x, y+7);      // Left
+            SDL_RenderLine(renderer, x, y+7, x+2, y+9);    // Bottom left
+            SDL_RenderLine(renderer, x+2, y+9, x+5, y+7);  // Bottom right
+            SDL_RenderLine(renderer, x+5, y+7, x+5, y+5);  // Right
+            SDL_RenderLine(renderer, x+5, y+5, x+3, y+5);  // G hook
+            break;
+        case 'H':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Left vertical
+            SDL_RenderLine(renderer, x+5, y, x+5, y+9);    // Right vertical
+            SDL_RenderLine(renderer, x, y+4, x+5, y+4);    // Middle
+            break;
+        case 'I':
+            SDL_RenderLine(renderer, x+2, y, x+2, y+9);    // Vertical
+            break;
+        case 'L':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Vertical
+            SDL_RenderLine(renderer, x, y+9, x+5, y+9);    // Bottom
+            break;
+        case 'M':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Left vertical
+            SDL_RenderLine(renderer, x+5, y, x+5, y+9);    // Right vertical
+            SDL_RenderLine(renderer, x, y, x+2, y+5);      // Left diagonal
+            SDL_RenderLine(renderer, x+5, y, x+3, y+5);    // Right diagonal
+            break;
+        case 'N':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Left vertical
+            SDL_RenderLine(renderer, x+5, y, x+5, y+9);    // Right vertical
+            SDL_RenderLine(renderer, x, y, x+5, y+9);      // Diagonal
+            break;
+        case 'O':
+            SDL_RenderLine(renderer, x+2, y, x+3, y);      // Top
+            SDL_RenderLine(renderer, x, y+2, x, y+7);      // Left
+            SDL_RenderLine(renderer, x+2, y+9, x+3, y+9);  // Bottom
+            SDL_RenderLine(renderer, x+5, y+2, x+5, y+7);  // Right
+            SDL_RenderLine(renderer, x+2, y, x, y+2);      // Top left
+            SDL_RenderLine(renderer, x+3, y, x+5, y+2);    // Top right
+            SDL_RenderLine(renderer, x, y+7, x+2, y+9);    // Bottom left
+            SDL_RenderLine(renderer, x+5, y+7, x+3, y+9);  // Bottom right
+            break;
+        case 'P':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Vertical
+            SDL_RenderLine(renderer, x, y, x+3, y);        // Top
+            SDL_RenderLine(renderer, x+3, y, x+5, y+2);    // Top curve
+            SDL_RenderLine(renderer, x+5, y+2, x+3, y+5);  // Bottom curve
+            SDL_RenderLine(renderer, x+3, y+5, x, y+5);    // Bottom
+            break;
+        case 'R':
+            SDL_RenderLine(renderer, x, y, x, y+9);        // Vertical
+            SDL_RenderLine(renderer, x, y, x+3, y);        // Top
+            SDL_RenderLine(renderer, x+3, y, x+5, y+2);    // Top curve
+            SDL_RenderLine(renderer, x+5, y+2, x+3, y+5);  // Bottom curve
+            SDL_RenderLine(renderer, x+3, y+5, x, y+5);    // Middle
+            SDL_RenderLine(renderer, x+2, y+5, x+5, y+9);  // Diagonal
+            break;
+        case 'S':
+            SDL_RenderLine(renderer, x+5, y+2, x+2, y);    // Top right
+            SDL_RenderLine(renderer, x+2, y, x, y+2);      // Top left
+            SDL_RenderLine(renderer, x, y+2, x+2, y+4);    // Middle left
+            SDL_RenderLine(renderer, x+2, y+4, x+3, y+4);  // Middle
+            SDL_RenderLine(renderer, x+3, y+4, x+5, y+6);  // Middle right
+            SDL_RenderLine(renderer, x+5, y+6, x+3, y+9);  // Bottom right
+            SDL_RenderLine(renderer, x+3, y+9, x, y+7);    // Bottom left
+            break;
+        case 'T':
+            SDL_RenderLine(renderer, x, y, x+5, y);        // Top
+            SDL_RenderLine(renderer, x+2, y, x+2, y+9);    // Vertical
+            break;
+        case 'Y':
+            SDL_RenderLine(renderer, x, y, x+2, y+4);      // Left diagonal
+            SDL_RenderLine(renderer, x+5, y, x+3, y+4);    // Right diagonal
+            SDL_RenderLine(renderer, x+2, y+4, x+2, y+9);  // Bottom vertical
+            break;
+        case '0':
+            SDL_RenderLine(renderer, x+2, y, x+3, y);      // Top
+            SDL_RenderLine(renderer, x, y+2, x, y+7);      // Left
+            SDL_RenderLine(renderer, x+2, y+9, x+3, y+9);  // Bottom
+            SDL_RenderLine(renderer, x+5, y+2, x+5, y+7);  // Right
+            SDL_RenderLine(renderer, x+2, y, x, y+2);      // Top left
+            SDL_RenderLine(renderer, x+3, y, x+5, y+2);    // Top right
+            SDL_RenderLine(renderer, x, y+7, x+2, y+9);    // Bottom left
+            SDL_RenderLine(renderer, x+5, y+7, x+3, y+9);  // Bottom right
+            break;
+        case '1':
+            SDL_RenderLine(renderer, x+2, y, x+2, y+9);    // Vertical
+            SDL_RenderLine(renderer, x+1, y+2, x+2, y);    // Diagonal
+            break;
+        case '2':
+            SDL_RenderLine(renderer, x+1, y+1, x+2, y);    // Top left curve
+            SDL_RenderLine(renderer, x+2, y, x+4, y);      // Top
+            SDL_RenderLine(renderer, x+4, y, x+5, y+2);    // Top right curve
+            SDL_RenderLine(renderer, x+5, y+2, x+3, y+5);  // Middle curve
+            SDL_RenderLine(renderer, x+3, y+5, x, y+9);    // Bottom left diagonal
+            SDL_RenderLine(renderer, x, y+9, x+5, y+9);    // Bottom
+            break;
+        case '3':
+            SDL_RenderLine(renderer, x+1, y+1, x+3, y);    // Top left curve
+            SDL_RenderLine(renderer, x+3, y, x+4, y+1);    // Top right curve
+            SDL_RenderLine(renderer, x+4, y+1, x+3, y+4);  // Middle top curve
+            SDL_RenderLine(renderer, x+3, y+4, x+4, y+5);  // Middle bottom curve
+            SDL_RenderLine(renderer, x+4, y+5, x+3, y+8);  // Bottom right curve
+            SDL_RenderLine(renderer, x+3, y+8, x+1, y+9);  // Bottom left curve
+            SDL_RenderLine(renderer, x+2, y+4, x+3, y+4);  // Middle connect
+            break;
+        case '4':
+            SDL_RenderLine(renderer, x+4, y, x+4, y+9);    // Right vertical
+            SDL_RenderLine(renderer, x+4, y, x, y+6);      // Diagonal
+            SDL_RenderLine(renderer, x, y+6, x+5, y+6);    // Horizontal
+            break;
+        case '5':
+            SDL_RenderLine(renderer, x+5, y, x, y);        // Top
+            SDL_RenderLine(renderer, x, y, x, y+4);        // Left vertical
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Middle
+            SDL_RenderLine(renderer, x+4, y+4, x+5, y+6);  // Middle right curve
+            SDL_RenderLine(renderer, x+5, y+6, x+4, y+9);  // Bottom right curve
+            SDL_RenderLine(renderer, x+4, y+9, x, y+9);    // Bottom
+            break;
+        case '6':
+            SDL_RenderLine(renderer, x+5, y+1, x+3, y);    // Top right curve
+            SDL_RenderLine(renderer, x+3, y, x+1, y+1);    // Top left curve
+            SDL_RenderLine(renderer, x+1, y+1, x, y+3);    // Upper left curve
+            SDL_RenderLine(renderer, x, y+3, x, y+7);      // Left vertical
+            SDL_RenderLine(renderer, x, y+7, x+2, y+9);    // Bottom left curve
+            SDL_RenderLine(renderer, x+2, y+9, x+4, y+8);  // Bottom curve
+            SDL_RenderLine(renderer, x+4, y+8, x+5, y+6);  // Bottom right curve
+            SDL_RenderLine(renderer, x+5, y+6, x+4, y+4);  // Middle right curve
+            SDL_RenderLine(renderer, x+4, y+4, x, y+4);    // Middle
+            break;
+        case '7':
+            SDL_RenderLine(renderer, x, y, x+5, y);        // Top
+            SDL_RenderLine(renderer, x+5, y, x+2, y+9);    // Diagonal
+            break;
+        case '8':
+            SDL_RenderLine(renderer, x+1, y+1, x+2, y);    // Top left curve
+            SDL_RenderLine(renderer, x+2, y, x+3, y);      // Top
+            SDL_RenderLine(renderer, x+3, y, x+4, y+1);    // Top right curve
+            SDL_RenderLine(renderer, x+4, y+1, x+4, y+3);  // Upper right vertical
+            SDL_RenderLine(renderer, x+4, y+3, x+3, y+4);  // Middle top right
+            SDL_RenderLine(renderer, x+3, y+4, x+2, y+4);  // Middle
+            SDL_RenderLine(renderer, x+2, y+4, x+1, y+3);  // Middle top left
+            SDL_RenderLine(renderer, x+1, y+3, x+1, y+1);  // Upper left vertical
+            SDL_RenderLine(renderer, x+1, y+5, x+2, y+4);  // Middle bottom left
+            SDL_RenderLine(renderer, x+2, y+4, x+3, y+4);  // Middle
+            SDL_RenderLine(renderer, x+3, y+4, x+4, y+5);  // Middle bottom right
+            SDL_RenderLine(renderer, x+4, y+5, x+4, y+7);  // Lower right vertical
+            SDL_RenderLine(renderer, x+4, y+7, x+3, y+9);  // Bottom right curve
+            SDL_RenderLine(renderer, x+3, y+9, x+2, y+9);  // Bottom
+            SDL_RenderLine(renderer, x+2, y+9, x+1, y+7);  // Bottom left curve
+            SDL_RenderLine(renderer, x+1, y+7, x+1, y+5);  // Lower left vertical
+            break;
+        case '9':
+            SDL_RenderLine(renderer, x+1, y+1, x+2, y);    // Top left curve
+            SDL_RenderLine(renderer, x+2, y, x+3, y);      // Top
+            SDL_RenderLine(renderer, x+3, y, x+4, y+1);    // Top right curve
+            SDL_RenderLine(renderer, x+4, y+1, x+5, y+3);  // Upper right curve
+            SDL_RenderLine(renderer, x+5, y+3, x+5, y+7);  // Right vertical
+            SDL_RenderLine(renderer, x+5, y+7, x+3, y+9);  // Bottom right curve
+            SDL_RenderLine(renderer, x+3, y+9, x+1, y+8);  // Bottom curve
+            SDL_RenderLine(renderer, x+1, y+1, x, y+3);    // Upper left curve
+            SDL_RenderLine(renderer, x, y+3, x+1, y+5);    // Middle left curve
+            SDL_RenderLine(renderer, x+1, y+5, x+5, y+5);  // Middle
+            break;
+        case ':':
+            SDL_RenderPoint(renderer, x+2, y+2);           // Top dot
+            SDL_RenderPoint(renderer, x+2, y+7);           // Bottom dot
+            break;
+        case ' ':
+            // Space - do nothing
+            break;
+        case '-':
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Middle
+            break;
+        case '_':
+            SDL_RenderLine(renderer, x, y+9, x+5, y+9);    // Bottom
+            break;
+        case '.':
+            SDL_RenderPoint(renderer, x+2, y+9);           // Dot
+            break;
+        case ',':
+            SDL_RenderLine(renderer, x+2, y+7, x+1, y+9);  // Comma
+            break;
+        case '!':
+            SDL_RenderLine(renderer, x+2, y, x+2, y+6);    // Vertical
+            SDL_RenderPoint(renderer, x+2, y+9);           // Bottom dot
+            break;
+        case '/':
+            SDL_RenderLine(renderer, x+5, y, x, y+9);      // Diagonal
+            break;
+        case '\\':
+            SDL_RenderLine(renderer, x, y, x+5, y+9);      // Diagonal
+            break;
+        case '(':
+            SDL_RenderLine(renderer, x+3, y, x+1, y+4);    // Top curve
+            SDL_RenderLine(renderer, x+1, y+4, x+3, y+9);  // Bottom curve
+            break;
+        case ')':
+            SDL_RenderLine(renderer, x+1, y, x+3, y+4);    // Top curve
+            SDL_RenderLine(renderer, x+3, y+4, x+1, y+9);  // Bottom curve
+            break;
+        case '+':
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Horizontal
+            SDL_RenderLine(renderer, x+2, y+2, x+2, y+7);  // Vertical
+            break;
+        case '=':
+            SDL_RenderLine(renderer, x, y+3, x+4, y+3);    // Top
+            SDL_RenderLine(renderer, x, y+6, x+4, y+6);    // Bottom
+            break;
+        case '[':
+            SDL_RenderLine(renderer, x+3, y, x+1, y);      // Top
+            SDL_RenderLine(renderer, x+1, y, x+1, y+9);    // Vertical
+            SDL_RenderLine(renderer, x+1, y+9, x+3, y+9);  // Bottom
+            break;
+        case ']':
+            SDL_RenderLine(renderer, x+1, y, x+3, y);      // Top
+            SDL_RenderLine(renderer, x+3, y, x+3, y+9);    // Vertical
+            SDL_RenderLine(renderer, x+3, y+9, x+1, y+9);  // Bottom
+            break;
+        case '{':
+            SDL_RenderLine(renderer, x+3, y, x+2, y+1);    // Top curve
+            SDL_RenderLine(renderer, x+2, y+1, x+2, y+3);  // Upper vertical
+            SDL_RenderLine(renderer, x+2, y+3, x+1, y+4);  // Middle top curve
+            SDL_RenderLine(renderer, x+1, y+4, x+2, y+5);  // Middle bottom curve
+            SDL_RenderLine(renderer, x+2, y+5, x+2, y+8);  // Lower vertical
+            SDL_RenderLine(renderer, x+2, y+8, x+3, y+9);  // Bottom curve
+            break;
+        case '}':
+            SDL_RenderLine(renderer, x+1, y, x+2, y+1);    // Top curve
+            SDL_RenderLine(renderer, x+2, y+1, x+2, y+3);  // Upper vertical
+            SDL_RenderLine(renderer, x+2, y+3, x+3, y+4);  // Middle top curve
+            SDL_RenderLine(renderer, x+3, y+4, x+2, y+5);  // Middle bottom curve
+            SDL_RenderLine(renderer, x+2, y+5, x+2, y+8);  // Lower vertical
+            SDL_RenderLine(renderer, x+2, y+8, x+1, y+9);  // Bottom curve
+            break;
+        case '>':
+            SDL_RenderLine(renderer, x, y+2, x+3, y+4);    // Top
+            SDL_RenderLine(renderer, x+3, y+4, x, y+7);    // Bottom
+            break;
+        case '<':
+            SDL_RenderLine(renderer, x+3, y+2, x, y+4);    // Top
+            SDL_RenderLine(renderer, x, y+4, x+3, y+7);    // Bottom
+            break;
+        case '\'':
+            SDL_RenderLine(renderer, x+2, y, x+2, y+2);    // Quote
+            break;
+        case '"':
+            SDL_RenderLine(renderer, x+1, y, x+1, y+2);    // Left quote
+            SDL_RenderLine(renderer, x+3, y, x+3, y+2);    // Right quote
+            break;
+        case '`':
+            SDL_RenderLine(renderer, x+1, y, x+2, y+2);    // Backtick
+            break;
+        case '~':
+            SDL_RenderLine(renderer, x, y+4, x+2, y+3);    // Left curve
+            SDL_RenderLine(renderer, x+2, y+3, x+4, y+5);  // Right curve
+            break;
+        case '@':
+            SDL_RenderLine(renderer, x+3, y, x+1, y+2);    // Top left curve
+            SDL_RenderLine(renderer, x+1, y+2, x+1, y+7);  // Left vertical
+            SDL_RenderLine(renderer, x+1, y+7, x+3, y+9);  // Bottom left curve
+            SDL_RenderLine(renderer, x+3, y+9, x+5, y+7);  // Bottom right curve
+            SDL_RenderLine(renderer, x+5, y+7, x+5, y+2);  // Right vertical
+            SDL_RenderLine(renderer, x+5, y+2, x+3, y);    // Top right curve
+            SDL_RenderLine(renderer, x+3, y+5, x+3, y+7);  // Inner vertical
+            SDL_RenderLine(renderer, x+3, y+7, x+4, y+7);  // Inner horizontal
+            SDL_RenderLine(renderer, x+4, y+7, x+5, y+5);  // Inner curve
+            break;
+        case '#':
+            SDL_RenderLine(renderer, x+1, y+1, x+1, y+8);  // Left vertical
+            SDL_RenderLine(renderer, x+4, y+1, x+4, y+8);  // Right vertical
+            SDL_RenderLine(renderer, x, y+3, x+5, y+3);    // Top horizontal
+            SDL_RenderLine(renderer, x, y+6, x+5, y+6);    // Bottom horizontal
+            break;
+        case '$':
+            SDL_RenderLine(renderer, x+2, y, x+2, y+9);    // Middle vertical
+            SDL_RenderLine(renderer, x+4, y+1, x+2, y+1);  // Top right
+            SDL_RenderLine(renderer, x+2, y+1, x, y+3);    // Top left curve
+            SDL_RenderLine(renderer, x, y+3, x+2, y+5);    // Middle left curve
+            SDL_RenderLine(renderer, x+2, y+5, x+4, y+5);  // Middle
+            SDL_RenderLine(renderer, x+4, y+5, x+5, y+7);  // Bottom right curve
+            SDL_RenderLine(renderer, x+5, y+7, x+3, y+9);  // Bottom curve
+            break;
+        case '%':
+            SDL_RenderLine(renderer, x+5, y, x, y+9);      // Main diagonal
+            SDL_RenderPoint(renderer, x+1, y+2);           // Top circle
+            SDL_RenderPoint(renderer, x+4, y+7);           // Bottom circle
+            break;
+        case '^':
+            SDL_RenderLine(renderer, x+1, y+3, x+2, y);    // Left diagonal
+            SDL_RenderLine(renderer, x+2, y, x+3, y+3);    // Right diagonal
+            break;
+        case '&':
+            SDL_RenderLine(renderer, x+4, y+1, x+2, y);    // Top right
+            SDL_RenderLine(renderer, x+2, y, x, y+2);      // Top left curve
+            SDL_RenderLine(renderer, x, y+2, x+2, y+4);    // Middle left curve
+            SDL_RenderLine(renderer, x+2, y+4, x, y+7);    // Middle right curve
+            SDL_RenderLine(renderer, x, y+7, x+2, y+9);    // Bottom left curve
+            SDL_RenderLine(renderer, x+2, y+9, x+4, y+7);  // Bottom right curve
+            SDL_RenderLine(renderer, x+4, y+7, x+5, y+9);  // Bottom right diagonal
+            break;
+        case '*':
+            SDL_RenderLine(renderer, x+2, y+2, x+2, y+7);  // Vertical
+            SDL_RenderLine(renderer, x, y+4, x+4, y+4);    // Horizontal
+            SDL_RenderLine(renderer, x+1, y+2, x+3, y+7);  // Diagonal 1
+            SDL_RenderLine(renderer, x+3, y+2, x+1, y+7);  // Diagonal 2
+            break;
+        default:
+            // For unknown characters, draw a rectangle
+            SDL_FRect charBox = {
+                static_cast<float>(x), static_cast<float>(y),
+                5.0f, 9.0f
+            };
+            SDL_RenderRect(renderer, &charBox);
+            break;
     }
-
-    SDL_SetRenderDrawColor(renderer, isRed ? 255 : 50, 0, 0, 255);
-    SDL_FRect redLight = {(float)(x + 10), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2),
-                         LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &redLight);
-
-    // Green light with glow effect
-    if (!isRed) {
-        // Glow
-        SDL_SetRenderDrawColor(renderer, 0, 150, 0, 100);
-        SDL_FRect greenGlow = {(float)(x + 40 - 3), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2 - 3),
-                              LIGHT_SIZE + 6, LIGHT_SIZE + 6};
-        SDL_RenderFillRect(renderer, &greenGlow);
-    }
-
-    SDL_SetRenderDrawColor(renderer, 0, isRed ? 50 : 255, 0, 255);
-    SDL_FRect greenLight = {(float)(x + 40), (float)(y + LIGHT_BOX_HEIGHT/2 - LIGHT_SIZE/2),
-                           LIGHT_SIZE, LIGHT_SIZE};
-    SDL_RenderFillRect(renderer, &greenLight);
-
-    // Add straight arrow for green light (horizontal pointing right)
-    if (!isRed) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
-
-        // Draw arrow shape
-        SDL_FRect arrowStem = {(float)(x + 50 - ARROW_SIZE/2), (float)(y + LIGHT_BOX_HEIGHT/2 - 2),
-                              (float)ARROW_SIZE, 4.0f};
-        SDL_RenderFillRect(renderer, &arrowStem);
-
-        // Arrow head (triangle)
-        SDL_Vertex vertices[3];
-        SDL_FColor white = {1.0f, 1.0f, 1.0f, 1.0f};
-
-        vertices[0].position.x = x + 50 + ARROW_SIZE/2 + 5;
-        vertices[0].position.y = y + LIGHT_BOX_HEIGHT/2;
-        vertices[0].color = white;
-
-        vertices[1].position.x = x + 50 + ARROW_SIZE/2;
-        vertices[1].position.y = y + LIGHT_BOX_HEIGHT/2 - 5;
-        vertices[1].color = white;
-
-        vertices[2].position.x = x + 50 + ARROW_SIZE/2;
-        vertices[2].position.y = y + LIGHT_BOX_HEIGHT/2 + 5;
-        vertices[2].color = white;
-
-        SDL_RenderGeometry(renderer, NULL, vertices, 3, NULL, 0);
-    }
-
-    // Black borders around lights
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderRect(renderer, &redLight);
-    SDL_RenderRect(renderer, &greenLight);
 }

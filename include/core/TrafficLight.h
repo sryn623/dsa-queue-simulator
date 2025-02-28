@@ -58,16 +58,13 @@ private:
     // Helper function to calculate average vehicle count
     float calculateAverageVehicleCount(const std::vector<Lane*>& lanes);
 
-    // Helper drawing functions
-    void drawLightForA(SDL_Renderer* renderer, bool isRed);
-    void drawLightForB(SDL_Renderer* renderer, bool isRed);
-    void drawLightForC(SDL_Renderer* renderer, bool isRed);
-    void drawLightForD(SDL_Renderer* renderer, bool isRed);
-
-    // Helper function for drawing road light indicators in the control panel
-    void drawRoadLightIndicator(SDL_Renderer* renderer, int x, int y,
-                               int lightSize, int labelHeight,
-                               char roadId, bool isRed);
+    // Modern UI drawing functions
+    void drawTrafficControlCenter(SDL_Renderer* renderer);
+    void drawJunctionLight(SDL_Renderer* renderer, int x, int y, char roadId, bool isGreen);
+    void drawStateTimer(SDL_Renderer* renderer);
+    void drawHolographicLight(SDL_Renderer* renderer, int x, int y, int size, bool isActive);
+    void drawPanelText(SDL_Renderer* renderer, const char* text, int x, int y);
+    void drawPanelChar(SDL_Renderer* renderer, char c, int x, int y);
 };
 
 #endif // TRAFFIC_LIGHT_H

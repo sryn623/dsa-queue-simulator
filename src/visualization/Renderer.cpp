@@ -199,11 +199,11 @@ void Renderer::drawRoadsAndLanes() {
 
     // ---------- STEP 1: BACKGROUND ----------
     // Draw dark gray background for the entire window
-    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
 
     // Draw grass areas in corners (to highlight road areas)
-    SDL_SetRenderDrawColor(renderer, 30, 100, 30, 255);  // Dark green grass
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);  // Black grass
 
     // Top-left grass
     SDL_FRect grassTL = {
