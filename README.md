@@ -2,8 +2,25 @@
 
 ## Introduction
 This project is a Traffic Light Simulation using SDL3. It simulates vehicles queuing and dequeueing based on traffic light changes.
+---
+
+The Generator works properly 🚗
+
+![Traffic Junction Simulator Demo](traffic.gif)
+
+---
+
+Data parsing in simulator is complete 🔍
+
+![Traffic Junction Simulator Demo](simulator.gif)
+
+---
+
+The Simulation works 🚦
 
 ![Traffic Junction Simulator Demo](UI.gif)
+
+---
 
 ## Features
 
