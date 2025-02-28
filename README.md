@@ -1,11 +1,10 @@
-# SMART TRAFFIC FLOW SIMULATOR 
-
-🚦 **An Intelligent, Queue-Based Solution for Optimized Traffic Flow** 🚦
+# DSA Queue Simulator 🚦
 
 ## Introduction
-Ever wondered how smart traffic systems handle busy intersections? This project simulates an advanced traffic management system using data structures, ensuring smooth and efficient movement through a multi-lane junction.
+This project is a Traffic Light Simulation using SDL3. It simulates vehicles queuing and dequeueing based on traffic light changes.
 
----
+![Traffic Junction Simulator Demo](UI.gif)
+
 ## Features
 
 ### 🔄 Smart Queue-Based Management
@@ -153,5 +152,4 @@ dsa-queue-simulator/
 
 🔗 [GitHub Repository](https://github.com/sryn623/dsa-queue-simulator)
 
-🎯 *Optimize urban mobility with the power of data structures!*
 
