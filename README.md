@@ -169,4 +169,10 @@ dsa-queue-simulator/
 
 🔗 [GitHub Repository](https://github.com/sryn623/dsa-queue-simulator)
 
+---
+
+## References
+- https://wiki.libsdl.org/SDL3/FrontPage
+- https://www.geeksforgeeks.org/
+
 
